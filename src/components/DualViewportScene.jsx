@@ -3,6 +3,7 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { Stars, OrbitControls, PerspectiveCamera, Line } from '@react-three/drei';
 import * as THREE from 'three';
 import { Eye, Zap, EyeOff, Radio, Target, Maximize2, Minimize2, Monitor } from 'lucide-react';
+import { useAppStore } from '../store/useAppStore';
 
 /**
  * Platform Jitter procedural noise helper
@@ -105,7 +106,8 @@ function OrbitalSatelliteTarget({
   onPosUpdate,
   dropLOS = false,
   showTrail = true,
-  targetVelocity = 1.0
+  targetVelocity = 1.0,
+  phaseOffset = 0
 }) {
   const groupRef = useRef();
   const satelliteBusRef = useRef();
@@ -116,7 +118,7 @@ function OrbitalSatelliteTarget({
   useFrame((_, delta) => {
     // Dynamically scale motion time with targetVelocity slider
     simTimeRef.current += delta * targetVelocity;
-    const t = simTimeRef.current;
+    const t = simTimeRef.current + phaseOffset;
 
     let x = 0, y = 3, z = -20;
 
@@ -603,6 +605,7 @@ export default function DualViewportScene({
   const [focusTarget, setFocusTarget] = useState('FREE_ORBIT');
   const [fullscreenMode, setFullscreenMode] = useState('SPLIT'); // 'SPLIT', 'VIEWPORT_A', 'VIEWPORT_B'
   const [isFullscreenApp, setIsFullscreenApp] = useState(false);
+  const isDualSatMode = useAppStore((s) => s.isDualSatMode);
 
   const toggleAppFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -625,6 +628,22 @@ export default function DualViewportScene({
           <p className="text-[9px] font-mono text-slate-500">Real-time FSOC Simulation</p>
         </div>
         <div className="flex items-center space-x-2">
+          {/* Direct 2-Satellite System Toggle Button */}
+          <button
+            onClick={() => useAppStore.getState().toggleDualSatMode()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            title="Toggle 2-Satellite Multi-Target Tracking"
+            className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold flex items-center space-x-1.5 transition-all cursor-pointer ${
+              isDualSatMode
+                ? 'bg-cyan-950/90 border border-cyan-400 text-cyan-300 shadow-cyan-500/20'
+                : 'bg-slate-900 border border-slate-700 hover:border-cyan-500 text-slate-300 hover:text-cyan-300'
+            }`}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${isDualSatMode ? 'bg-cyan-400 animate-ping' : 'bg-slate-500'}`} />
+            <span>{isDualSatMode ? '2-SAT: BARYCENTER' : '🛰️ 2-SAT TRACKING'}</span>
+          </button>
+
           <button
             onClick={() => setFocusTarget('FREE_ORBIT')}
             onMouseDown={(e) => e.stopPropagation()}
@@ -718,6 +737,16 @@ export default function DualViewportScene({
               targetVelocity={targetVelocity}
             />
 
+            {isDualSatMode && (
+              <OrbitalSatelliteTarget
+                trajectoryPreset={trajectoryPreset === 'SINUSOIDAL' ? 'FIGURE_8' : trajectoryPreset}
+                phaseOffset={Math.PI * 0.8}
+                dropLOS={dropLOS}
+                showTrail={showPIP}
+                targetVelocity={targetVelocity}
+              />
+            )}
+
             <OpticalLaserBeam isLocked={isLocked} beaconPos={beaconPos} />
             <EnvironmentalDisturbances turbulenceIntensity={turbulenceIntensity} dropLOS={dropLOS} />
 
@@ -794,6 +823,15 @@ export default function DualViewportScene({
             />
 
             <OrbitalSatelliteTarget trajectoryPreset={trajectoryPreset} beaconRef={beaconRef} dropLOS={dropLOS} showTrail={showPIP} targetVelocity={targetVelocity} />
+            {isDualSatMode && (
+              <OrbitalSatelliteTarget
+                trajectoryPreset={trajectoryPreset === 'SINUSOIDAL' ? 'FIGURE_8' : trajectoryPreset}
+                phaseOffset={Math.PI * 0.8}
+                dropLOS={dropLOS}
+                showTrail={showPIP}
+                targetVelocity={targetVelocity}
+              />
+            )}
             <EnvironmentalDisturbances turbulenceIntensity={turbulenceIntensity} dropLOS={dropLOS} />
           </Canvas>
 
@@ -804,7 +842,7 @@ export default function DualViewportScene({
               <div className="absolute h-full w-[1px] bg-slate-700/60" />
               <div className="w-3.5 h-3.5 border border-emerald-400 rounded-full animate-ping" />
               <div className="absolute top-2 left-2 text-[9px] font-mono text-cyan-400">
-                STATE: {trackingState}
+                STATE: {trackingState} {isDualSatMode ? '(2-SAT VSP)' : ''}
               </div>
             </div>
           </div>
@@ -833,6 +871,12 @@ export default function DualViewportScene({
             <span className="w-1.5 h-1.5 bg-emerald-400 rounded-sm" />
             <span className="text-slate-300">SAT-01</span>
           </span>
+          {isDualSatMode && (
+            <span className="flex items-center space-x-1 animate-fade-in">
+              <span className="w-1.5 h-1.5 bg-cyan-400 rounded-sm animate-pulse" />
+              <span className="text-cyan-300 font-bold">SAT-02</span>
+            </span>
+          )}
           <span className="flex items-center space-x-1">
             <span className="w-1.5 h-1.5 bg-cyan-400 rounded-sm" />
             <span className="text-slate-300">FSOC-CAM-01</span>

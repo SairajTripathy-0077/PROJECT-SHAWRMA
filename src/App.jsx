@@ -65,13 +65,10 @@ export default function App() {
       const tVel = tilt_vel !== undefined ? tilt_vel : tilt_velocity;
       const [errX, errY] = error_px || [0, 0];
 
-      // Scale velocity command (px/s) to degree delta per frame: degDelta = vel * (zoomFov / 640) * dt
-      const degPerPx = (zoomFov || 45.0) / 640.0;
-      const dt = 0.033;
-
+      // Smooth step integration without over-gain multiplier
       if (isTrackingActive && !isPaused) {
-        setPan((prev) => prev + pVel * degPerPx * dt);
-        setTilt((prev) => prev + tVel * degPerPx * dt);
+        setPan((prev) => prev + pVel * 1.0);
+        setTilt((prev) => prev + tVel * 1.0);
       }
 
       setTrackingState(state);

@@ -48,8 +48,13 @@ const createTrackingSlice = (set, get) => ({
   trackingState: 'SEARCHING',
   searchSpiralRadius: 15.0,
   pidGains: { ...DEFAULT_PID_GAINS },
+  isDualSatMode: false,
+  vspMode: 'BARYCENTER', // 'PRIMARY_ONLY' or 'BARYCENTER'
   setTrackingState: (trackingState) => set({ trackingState }),
   setSearchSpiralRadius: (searchSpiralRadius) => set({ searchSpiralRadius }),
+  setIsDualSatMode: (isDualSatMode) => set({ isDualSatMode }),
+  setVspMode: (vspMode) => set({ vspMode }),
+  toggleDualSatMode: () => set((state) => ({ isDualSatMode: !state.isDualSatMode })),
   updatePidGains: async (newGains) => {
     set({ pidGains: newGains });
     if (typeof window !== 'undefined' && window.__TAURI_INTERNALS__) {

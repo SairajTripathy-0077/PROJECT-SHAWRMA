@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Pause, Play, Square, Monitor, Cpu, Layers } from 'lucide-react';
+import { Pause, Play, Square, Monitor, Cpu, Layers, Crosshair } from 'lucide-react';
+import { useAppStore } from '../store/useAppStore';
 
 export default function AsteriaHeader({
   isPaused = false,
@@ -45,11 +46,25 @@ export default function AsteriaHeader({
         </div>
       </div>
 
-      {/* Center: Control Buttons */}
+      {/* Center: Control Buttons & 2-Satellite System Shortcut */}
       <div className="flex items-center space-x-2">
         <button
+          onClick={() => useAppStore.getState().toggleDualSatMode()}
+          title="Toggle 2-Satellite Multi-Target Tracking"
+          className={`px-3 py-1 rounded border text-[11px] font-bold flex items-center space-x-1.5 transition-all shadow-md cursor-pointer ${
+            useAppStore.getState().isDualSatMode
+              ? 'bg-cyan-950/90 border-cyan-400 text-cyan-300 shadow-cyan-500/20 glow-cyan'
+              : 'bg-slate-900 border-slate-700 hover:border-cyan-500/50 text-slate-300 hover:text-cyan-300'
+          }`}
+        >
+          <Crosshair className={`w-3.5 h-3.5 ${useAppStore.getState().isDualSatMode ? 'text-cyan-400 animate-spin' : 'text-slate-400'}`} style={{ animationDuration: '6s' }} />
+          <span>{useAppStore.getState().isDualSatMode ? '2-SAT: BARYCENTER' : '2-SAT TRACKING'}</span>
+          <span className={`w-1.5 h-1.5 rounded-full ${useAppStore.getState().isDualSatMode ? 'bg-cyan-400 animate-ping' : 'bg-slate-600'}`} />
+        </button>
+
+        <button
           onClick={onTogglePause}
-          className="px-3 py-1 rounded bg-slate-900 border border-slate-700 hover:border-amber-500/50 text-slate-200 hover:text-amber-400 text-[11px] font-bold flex items-center space-x-1.5 transition-all"
+          className="px-3 py-1 rounded bg-slate-900 border border-slate-700 hover:border-amber-500/50 text-slate-200 hover:text-amber-400 text-[11px] font-bold flex items-center space-x-1.5 transition-all cursor-pointer"
         >
           {isPaused ? (
             <>

@@ -1,13 +1,12 @@
 """
-FSOC PAT State-Anchored Optical Tracker & Estimator Engine
-Features:
-- State-Anchored Kalman Filter with Forward Projection (Latency Compensation)
-- Dynamic Innovation-Based Residual Q Adaptation (5x Scaling on Maneuvers)
-- First-Frame Shock Prevention (Anchored Initial Position with Zero Initial Velocity)
-- Covariance-Bounded Coasting during Dropouts
-- Integration with Dynamic Perimeter TCoG and Feedforward Back-Calculation PID
-- Dual-Mode Tokio TCP / Stdio IPC Streaming
-- Zero-Regression Telemetry Schema Compatibility (snake_case and alias mappings)
+FSOC PAT State-Anchored Multi-Target Optical Tracker & Estimator Engine
+Aerospace-Grade Architecture Featuring:
+- MultiTracker with N=2 Tracks (Sat 1 Primary & Sat 2 Secondary)
+- Momentum-Aware Data Association (Mahalanobis Distance + Velocity Alignment Cost)
+- Chi-Square (9.21) Innovation Gating against False Associations / ID Swapping
+- State-Anchored Kalman Filters with Decoupled Forward Latency Projection (+25ms)
+- Asymmetric Dropout & Cloud-Fade Tracking
+- Full Backward Compatibility with Single-Target AutonomousPATTrackingEngine & Stdio Streams
 """
 
 import sys
@@ -15,16 +14,16 @@ import json
 import base64
 import time
 import math
-from typing import Tuple, Optional, Dict, Any
+from typing import Tuple, Optional, Dict, Any, List
 import numpy as np
 
 try:
     from backend.cv_pipeline import DynamicPerimeterTCoGTracker, VisionTracker, HAS_OPENCV
-    from backend.controller import FeedforwardBackcalcPIDController, DEFAULT_CONTROLLER_CONFIG
+    from backend.controller import FeedforwardBackcalcPIDController, VirtualSetpointController, DEFAULT_CONTROLLER_CONFIG
 except ImportError:
     try:
         from cv_pipeline import DynamicPerimeterTCoGTracker, VisionTracker, HAS_OPENCV
-        from controller import FeedforwardBackcalcPIDController, DEFAULT_CONTROLLER_CONFIG
+        from controller import FeedforwardBackcalcPIDController, VirtualSetpointController, DEFAULT_CONTROLLER_CONFIG
     except ImportError:
         HAS_OPENCV = False
         DEFAULT_CONTROLLER_CONFIG = {}
@@ -73,6 +72,7 @@ class StateAnchoredKalmanFilter2D:
         self.frames_lost = 0
         self.initialized = False
         self.last_innovation_mag = 0.0
+        self.last_meas: Optional[Tuple[float, float]] = None
 
     def _build_transition_matrix(self, dt: float) -> np.ndarray:
         return np.array([
@@ -102,12 +102,24 @@ class StateAnchoredKalmanFilter2D:
         self.P = np.dot(np.dot(F, self.P), F.T) + Q
         self.P = (self.P + self.P.T) * 0.5
 
-        # Bound covariance growth during long dropouts
         tr = np.trace(self.P)
         if tr > self.max_covariance_trace:
             self.P *= (self.max_covariance_trace / tr)
 
         return float(self.x[0, 0]), float(self.x[1, 0])
+
+    def compute_mahalanobis_distance(self, z_x: float, z_y: float) -> Tuple[float, np.ndarray]:
+        """Computes Mahalanobis distance of candidate measurement from predicted track state."""
+        z = np.array([[z_x], [z_y]], dtype=np.float32)
+        y = z - np.dot(self.H, self.x)
+        S = np.dot(np.dot(self.H, self.P), self.H.T) + self.R
+        try:
+            S_inv = np.linalg.inv(S)
+            d_sq = float(np.dot(np.dot(y.T, S_inv), y)[0, 0])
+            d_mahal = math.sqrt(max(0.0, d_sq))
+        except np.linalg.LinAlgError:
+            d_mahal = float(np.hypot(y[0, 0], y[1, 0]))
+        return d_mahal, y
 
     def update(self, z_x: float, z_y: float, dt: Optional[float] = None) -> Tuple[float, float, float, float]:
         step_dt = min(dt if dt is not None and dt > 0 else self.dt_default, 0.1)
@@ -119,6 +131,7 @@ class StateAnchoredKalmanFilter2D:
             self.x[3, 0] = 0.0
             self.initialized = True
             self.frames_lost = 0
+            self.last_meas = (z_x, z_y)
             return float(z_x), float(z_y), 0.0, 0.0
 
         z = np.array([[z_x], [z_y]], dtype=np.float32)
@@ -138,6 +151,7 @@ class StateAnchoredKalmanFilter2D:
         self.P = np.dot((I - np.dot(K, self.H)), self.P)
         self.P = (self.P + self.P.T) * 0.5
         self.frames_lost = 0
+        self.last_meas = (z_x, z_y)
 
         return float(self.x[0, 0]), float(self.x[1, 0]), float(self.x[2, 0]), float(self.x[3, 0])
 
@@ -146,6 +160,10 @@ class StateAnchoredKalmanFilter2D:
         proj_x = float(self.x[0, 0] + self.x[2, 0] * dt_lag)
         proj_y = float(self.x[1, 0] + self.x[3, 0] * dt_lag)
         return proj_x, proj_y
+
+    def get_state(self) -> Tuple[float, float, float, float]:
+        """Returns current state vector (x, y, vx, vy)."""
+        return float(self.x[0, 0]), float(self.x[1, 0]), float(self.x[2, 0]), float(self.x[3, 0])
 
     def coast(self, dt: Optional[float] = None) -> Tuple[float, float, float, float]:
         self.frames_lost += 1
@@ -158,6 +176,179 @@ class StateAnchoredKalmanFilter2D:
         self.frames_lost = 0
         self.initialized = False
         self.last_innovation_mag = 0.0
+        self.last_meas = None
+
+
+class MultiTracker:
+    """
+    Multi-Target State Estimator (N=2) with Momentum-Aware Data Association.
+    Prevents ID swapping during path crossing/merges using Kinematic Momentum Consistency.
+    """
+    def __init__(
+        self,
+        num_tracks: int = 2,
+        dt_default: float = 0.033,
+        latency_lag_s: float = 0.025,
+        lambda_momentum: float = 3.0,
+        chi2_gate: float = 9.21  # Chi-squared gate for 2 DOF (p=0.01)
+    ):
+        self.num_tracks = num_tracks
+        self.dt_default = dt_default
+        self.latency_lag_s = latency_lag_s
+        self.lambda_momentum = lambda_momentum
+        self.chi2_gate = chi2_gate
+
+        self.tracks = [
+            StateAnchoredKalmanFilter2D(dt_default=dt_default, latency_lag_s=latency_lag_s)
+            for _ in range(num_tracks)
+        ]
+        self.track_names = ["SAT_1", "SAT_2"]
+        self.track_statuses = ["SEARCHING", "SEARCHING"]
+
+    def predict_all(self, dt: float = 0.033) -> List[Tuple[float, float]]:
+        """Predict forward step for all active tracks."""
+        predictions = []
+        for kf in self.tracks:
+            if kf.initialized:
+                px, py = kf.predict(dt=dt)
+            else:
+                px, py = 320.0, 240.0
+            predictions.append((px, py))
+        return predictions
+
+    def get_projections_all(self) -> List[Tuple[float, float]]:
+        """Get latency-compensated forward projected coordinates for all tracks."""
+        projections = []
+        for kf in self.tracks:
+            if kf.initialized:
+                projections.append(kf.get_forward_projection())
+            else:
+                projections.append((320.0, 240.0))
+        return projections
+
+    def update_with_measurements(
+        self,
+        measurements: List[Optional[Tuple[float, float]]],
+        dt: float = 0.033
+    ) -> List[Dict[str, Any]]:
+        """
+        Executes Momentum-Aware Data Association between M measurements and N tracks.
+        """
+        valid_meas = [m for m in measurements if m is not None]
+        m_count = len(valid_meas)
+        n_tracks = self.num_tracks
+
+        # Step 1: Compute Cost Matrix with Spatial Mahalanobis + Momentum Penalty
+        cost_matrix = np.full((n_tracks, max(1, m_count)), 1e6, dtype=np.float32)
+
+        for i, kf in enumerate(self.tracks):
+            if not kf.initialized:
+                continue
+
+            vx_est = float(kf.x[2, 0])
+            vy_est = float(kf.x[3, 0])
+            v_est_mag = float(np.hypot(vx_est, vy_est))
+
+            for j, meas in enumerate(valid_meas):
+                # 1. Spatial Cost (Mahalanobis Distance)
+                d_mahal, residual = kf.compute_mahalanobis_distance(meas[0], meas[1])
+
+                # Reject if outside Chi-square gate
+                if (d_mahal ** 2) > self.chi2_gate and kf.frames_lost < 3:
+                    continue
+
+                # 2. Momentum Cost (Penalize velocity vector misalignment)
+                momentum_cost = 0.0
+                if v_est_mag > 2.0 and kf.last_meas is not None:
+                    # Measured velocity vector from previous measurement
+                    v_meas_x = (meas[0] - kf.last_meas[0]) / max(dt, 0.001)
+                    v_meas_y = (meas[1] - kf.last_meas[1]) / max(dt, 0.001)
+                    v_meas_mag = float(np.hypot(v_meas_x, v_meas_y))
+
+                    if v_meas_mag > 1.0:
+                        # Cosine similarity between established momentum and candidate
+                        dot_prod = (v_meas_x * vx_est + v_meas_y * vy_est)
+                        cos_sim = dot_prod / (v_meas_mag * v_est_mag + 1e-4)
+                        # Range [0.0 (aligned) -> 2.0 (reversal)]
+                        momentum_cost = float(np.clip(1.0 - cos_sim, 0.0, 2.0))
+
+                # Total Combined Cost
+                total_cost = d_mahal + self.lambda_momentum * momentum_cost
+                cost_matrix[i, j] = total_cost
+
+        # Step 2: Optimal Assignment via Minimum Cost Permutation
+        assigned_track_to_meas: Dict[int, int] = {}
+        assigned_meas: set = set()
+
+        if m_count == 1:
+            # 1 measurement available -> assign to track with lowest cost if gated
+            best_i = int(np.argmin(cost_matrix[:, 0]))
+            if cost_matrix[best_i, 0] < 1e5:
+                assigned_track_to_meas[best_i] = 0
+                assigned_meas.add(0)
+            else:
+                # If neither initialized track matched, initialize first uninitialized track
+                for i, kf in enumerate(self.tracks):
+                    if not kf.initialized:
+                        assigned_track_to_meas[i] = 0
+                        assigned_meas.add(0)
+                        break
+
+        elif m_count >= 2:
+            # 2 measurements available -> Evaluate (0->0, 1->1) vs (0->1, 1->0)
+            cost_direct = cost_matrix[0, 0] + cost_matrix[1, 1]
+            cost_crossed = cost_matrix[0, 1] + cost_matrix[1, 0]
+
+            if not self.tracks[0].initialized and not self.tracks[1].initialized:
+                # First frame: deterministic assignment
+                assigned_track_to_meas[0] = 0
+                assigned_track_to_meas[1] = 1
+            elif cost_direct <= cost_crossed and cost_direct < 1e5:
+                assigned_track_to_meas[0] = 0
+                assigned_track_to_meas[1] = 1
+            elif cost_crossed < cost_direct and cost_crossed < 1e5:
+                # Momentum strongly favors cross assignment (resolved crossover without ID swap)
+                assigned_track_to_meas[0] = 1
+                assigned_track_to_meas[1] = 0
+            else:
+                # Fallback matching
+                for i in range(n_tracks):
+                    for j in range(m_count):
+                        if j not in assigned_meas and cost_matrix[i, j] < 1e5:
+                            assigned_track_to_meas[i] = j
+                            assigned_meas.add(j)
+                            break
+
+        # Step 3: Update matched tracks and coast unassigned tracks
+        track_outputs = []
+        for i, kf in enumerate(self.tracks):
+            if i in assigned_track_to_meas:
+                meas_idx = assigned_track_to_meas[i]
+                meas = valid_meas[meas_idx]
+                est_x, est_y, vx, vy = kf.update(meas[0], meas[1], dt=dt)
+                status = "TRACKING"
+            else:
+                est_x, est_y, vx, vy = kf.coast(dt=dt)
+                if kf.frames_lost <= 5:
+                    status = "COASTING"
+                else:
+                    status = "LOST"
+
+            self.track_statuses[i] = status
+            proj_x, proj_y = kf.get_forward_projection()
+
+            track_outputs.append({
+                "id": i,
+                "name": self.track_names[i],
+                "status": status,
+                "estimated_pos": [round(est_x, 2), round(est_y, 2)],
+                "projected_pos": [round(proj_x, 2), round(proj_y, 2)],
+                "velocity": [round(vx, 2), round(vy, 2)],
+                "frames_lost": kf.frames_lost,
+                "active": status in ["TRACKING", "COASTING"]
+            })
+
+        return track_outputs
 
 
 # Backward compatibility aliases
@@ -168,6 +359,7 @@ KalmanFilter2D = StateAnchoredKalmanFilter2D
 class AutonomousPATTrackingEngine:
     """
     Complete FSOC PAT Vision, Estimation, and Control Core Engine.
+    Supports Dual-Target and Single-Target Modes seamlessly.
     """
     def __init__(self, cfg: Optional[Dict[str, Any]] = None):
         self.cfg = cfg or {
@@ -181,15 +373,17 @@ class AutonomousPATTrackingEngine:
             "a_max": 3500.0,
             "integral_limit": 50.0,
             "boresight_x": 320.0,
-            "boresight_y": 240.0
+            "boresight_y": 240.0,
+            "control_mode": "PRIMARY_ONLY"  # "PRIMARY_ONLY" | "BARYCENTER"
         }
 
         self.vision = VisionTracker()
-        self.kalman = StateAnchoredKalmanFilter2D(
+        self.multi_tracker = MultiTracker(
+            num_tracks=2,
             dt_default=0.033,
             latency_lag_s=self.cfg.get("latency_ms", 25.0) / 1000.0
         )
-        self.controller = FeedforwardBackcalcPIDController(
+        self.controller = VirtualSetpointController(
             kp=self.cfg.get("kp", 7.5),
             ki=self.cfg.get("ki", 1.5),
             kd=self.cfg.get("kd", 0.1),
@@ -197,9 +391,12 @@ class AutonomousPATTrackingEngine:
             k_aw=self.cfg.get("k_aw", 0.6),
             max_vel=self.cfg.get("max_vel", 180.0),
             a_max=self.cfg.get("a_max", 3500.0),
-            integral_limit=self.cfg.get("integral_limit", 50.0)
+            integral_limit=self.cfg.get("integral_limit", 50.0),
+            mode=self.cfg.get("control_mode", "PRIMARY_ONLY")
         )
 
+        # Single tracker backward-compatible pointer
+        self.kalman = self.multi_tracker.tracks[0]
         self.last_timestamp = None
 
     def process_frame(
@@ -207,7 +404,8 @@ class AutonomousPATTrackingEngine:
         frame_b64: str = "",
         input_err_x: Optional[float] = None,
         input_err_y: Optional[float] = None,
-        timestamp_s: Optional[float] = None
+        timestamp_s: Optional[float] = None,
+        control_mode: Optional[str] = None
     ) -> Dict[str, Any]:
         now = time.time() if timestamp_s is None else timestamp_s
         if self.last_timestamp is None:
@@ -216,64 +414,69 @@ class AutonomousPATTrackingEngine:
             dt = max(min(now - self.last_timestamp, 0.1), 0.001)
         self.last_timestamp = now
 
-        # 1. Extrapolate projected beacon coordinate for ROI center
-        proj_x, proj_y = self.kalman.get_forward_projection()
-        if not self.kalman.initialized:
-            proj_x, proj_y = self.cfg["boresight_x"], self.cfg["boresight_y"]
+        if control_mode:
+            self.controller.set_mode(control_mode)
 
-        # 2. Computer Vision Optical Detection (TCoG + Dynamic ROI)
+        # 1. Forward Predictions for ROI Windows
+        self.multi_tracker.predict_all(dt=dt)
+        predicted_centers = self.multi_tracker.get_projections_all()
+
+        # 2. Multi-Target Optical Extraction (Soft-Masked TCoG)
         frame_np = self.vision.decode_b64(frame_b64) if frame_b64 else None
-        centroid, fsm_state, cv_latency_ms = self.vision.process_frame_pipeline(
-            frame_np, proj_x, proj_y
+        measurements, fsm_state, cv_latency_ms = self.vision.process_multi_targets(
+            frame_np, predicted_centers
         )
 
-        # 3. Handle coordinate inputs
-        if centroid is not None:
-            raw_x, raw_y = centroid
-            self.kalman.predict(dt=dt)
-            est_x, est_y, vx, vy = self.kalman.update(raw_x, raw_y, dt=dt)
-            beacon_detected = True
-        elif input_err_x is not None and input_err_y is not None:
+        # Single target coordinate overrides from IPC fallback
+        if input_err_x is not None and input_err_y is not None:
             raw_x = self.cfg["boresight_x"] + float(input_err_x)
             raw_y = self.cfg["boresight_y"] + float(input_err_y)
-            self.kalman.predict(dt=dt)
-            est_x, est_y, vx, vy = self.kalman.update(raw_x, raw_y, dt=dt)
-            beacon_detected = True
-            fsm_state = "TRACKING"
-        else:
-            est_x, est_y, vx, vy = self.kalman.coast(dt=dt)
-            beacon_detected = self.kalman.frames_lost <= 5
+            measurements = [(raw_x, raw_y), None]
 
-        # 4. Latency-Compensated Forward Projected Setpoint for Controller
-        x_proj, y_proj = self.kalman.get_forward_projection()
+        # 3. Momentum-Aware Data Association & Estimation
+        tracks_data = self.multi_tracker.update_with_measurements(measurements, dt=dt)
 
-        # 5. Feedforward + Back-Calculation PID Controller
-        pan_vel, tilt_vel, err_x, err_y = self.controller.compute(
-            x_proj=x_proj,
-            y_proj=y_proj,
-            vel_est_x=vx,
-            vel_est_y=vy,
+        # 4. Virtual Setpoint Calculation & Gimbal Control
+        sat1_proj = tracks_data[0]["projected_pos"]
+        sat1_vel = tracks_data[0]["velocity"]
+        sat1_fade = tracks_data[0]["frames_lost"]
+
+        sat2_proj = tracks_data[1]["projected_pos"]
+        sat2_vel = tracks_data[1]["velocity"]
+        sat2_fade = tracks_data[1]["frames_lost"]
+
+        pan_vel, tilt_vel, err_x, err_y, vsp_out, telemetry_meta = self.controller.compute_multi_target(
+            sat1_proj=sat1_proj,
+            sat1_vel=sat1_vel,
+            sat1_fade=sat1_fade,
+            sat2_proj=sat2_proj,
+            sat2_vel=sat2_vel,
+            sat2_fade=sat2_fade,
             boresight_x=self.cfg["boresight_x"],
             boresight_y=self.cfg["boresight_y"],
             dt=dt
         )
 
-        is_locked = beacon_detected and (abs(err_x) < 15.0) and (abs(err_y) < 15.0)
+        is_locked = (abs(err_x) < 15.0) and (abs(err_y) < 15.0)
         current_fps = round(1.0 / dt, 1) if dt > 0 else 60.0
         current_rmse = round(float(np.hypot(err_x, err_y)), 2)
 
         return {
-            "state": fsm_state,
+            "state": telemetry_meta.get("state", fsm_state),
             "pan_velocity": round(pan_vel, 4),
             "tilt_velocity": round(tilt_vel, 4),
             "pan_vel": round(pan_vel, 4),
             "tilt_vel": round(tilt_vel, 4),
             "error_px": [round(err_x, 2), round(err_y, 2)],
-            "predicted_px": [round(x_proj - self.cfg["boresight_x"], 2), round(y_proj - self.cfg["boresight_y"], 2)],
+            "predicted_px": [round(vsp_out[0] - self.cfg["boresight_x"], 2), round(vsp_out[1] - self.cfg["boresight_y"], 2)],
             "locked": bool(is_locked),
             "rmse": current_rmse,
             "fps": current_fps,
-            "cv_latency_ms": round(cv_latency_ms, 2)
+            "cv_latency_ms": round(cv_latency_ms, 2),
+            "targets": tracks_data,
+            "vsp": [round(vsp_out[0], 2), round(vsp_out[1], 2)],
+            "divergence_warning": telemetry_meta.get("divergence_warning", False),
+            "mode": telemetry_meta.get("active_mode", self.controller.current_mode)
         }
 
 
@@ -353,7 +556,6 @@ def extract_centroid_and_binary_preview(frame_b64: str) -> Tuple[Optional[Tuple[
         tracker = DynamicPerimeterTCoGTracker()
         centroid, status, meta = tracker.extract_centroid_tcog(gray, 320.0, 240.0)
         
-        # Binary preview thumbnail
         threshold = int(meta.get("threshold", 200))
         _, thresh = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
         _, buf = cv2.imencode(".jpg", thresh)
@@ -368,7 +570,7 @@ def main():
     print(json.dumps({
         "status": "READY",
         "opencv": HAS_OPENCV,
-        "message": "FSOC PAT State-Anchored TCoG Feedforward Engine Initialized",
+        "message": "FSOC PAT Multi-Target State-Anchored TCoG Engine Initialized",
         "config": engine.cfg
     }), flush=True)
 
@@ -383,12 +585,14 @@ def main():
             input_err_x = data.get("error_x", None)
             input_err_y = data.get("error_y", None)
             timestamp_s = data.get("timestamp", None)
+            control_mode = data.get("control_mode", None)
 
             res = engine.process_frame(
                 frame_b64=frame_b64,
                 input_err_x=input_err_x,
                 input_err_y=input_err_y,
-                timestamp_s=timestamp_s
+                timestamp_s=timestamp_s,
+                control_mode=control_mode
             )
             print(json.dumps(res), flush=True)
 
