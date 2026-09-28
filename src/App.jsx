@@ -67,14 +67,10 @@ export default function App() {
       const tVel = tilt_vel !== undefined ? tilt_vel : tilt_velocity;
       const [errX, errY] = error_px || [0, 0];
 
-      // Smooth step integration with dynamic Max Velocity Slew Rate Clamping
+      // Fast responsive step integration for high-speed tracking
       if (isTrackingActive && !isPaused) {
-        const dt = 0.033;
-        const maxDeltaDeg = (gimbalMaxVel || 120.0) * dt;
-        const clampedPVel = Math.max(-maxDeltaDeg, Math.min(maxDeltaDeg, pVel));
-        const clampedTVel = Math.max(-maxDeltaDeg, Math.min(maxDeltaDeg, tVel));
-        setPan((prev) => prev + clampedPVel);
-        setTilt((prev) => prev + clampedTVel);
+        setPan((prev) => prev + pVel * 2.5);
+        setTilt((prev) => prev + tVel * 2.5);
       }
 
       setTrackingState(state);
