@@ -99,6 +99,40 @@ fn process_frame(payload: FramePayload, state: State<'_, AppState>) -> Result<Tr
     })
 }
 
+#[tauri::command]
+fn reveal_in_explorer(path: String) -> Result<(), String> {
+    println!("[Tauri IPC] Revealing in explorer: {}", path);
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new("explorer")
+            .arg("/select,")
+            .arg(&path)
+            .spawn();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = Command::new("open")
+            .arg(&path)
+            .spawn();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn save_benchmark_csv(file_name: String, csv_data: String) -> Result<String, String> {
+    use std::fs::File;
+    use std::io::Write;
+
+    let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
+    let file_path = current_dir.join(&file_name);
+    if let Ok(mut file) = File::create(&file_path) {
+        let _ = file.write_all(csv_data.as_bytes());
+    }
+
+    println!("[Tauri IPC] Benchmark CSV written to: {:?}", file_path);
+    Ok(file_path.to_string_lossy().to_string())
+}
+
 fn spawn_python_sidecar() -> Arc<Mutex<Option<Child>>> {
     println!("[Rust Subprocess] Spawning Python sidecar tracker process...");
     let child_res = Command::new("python")
@@ -145,7 +179,12 @@ fn main() {
             },
         })
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![process_frame, update_pid_gains])
+        .invoke_handler(tauri::generate_handler![
+            process_frame,
+            update_pid_gains,
+            reveal_in_explorer,
+            save_benchmark_csv
+        ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 println!("[Tauri Window] Window close requested. Cleaning up child processes...");
