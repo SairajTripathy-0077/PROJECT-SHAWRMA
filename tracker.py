@@ -108,7 +108,7 @@ class ConfigurableDualAxisPID:
     """
     Production Dual-Axis PID Controller with Anti-Windup Clamping and Dynamic Gain Updates
     """
-    def __init__(self, kp_pan=0.08, ki_pan=0.005, kd_pan=0.015, kp_tilt=0.08, ki_tilt=0.005, kd_tilt=0.015, max_vel=20.0):
+    def __init__(self, kp_pan=0.15, ki_pan=0.005, kd_pan=0.04, kp_tilt=0.15, ki_tilt=0.005, kd_tilt=0.04, max_vel=50.0):
         self.kp_pan = kp_pan
         self.ki_pan = ki_pan
         self.kd_pan = kd_pan

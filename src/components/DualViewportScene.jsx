@@ -67,8 +67,8 @@ function ObserverCameraControl({ focusTarget, beaconPos, orbitControlsRef }) {
       const targetVec = new THREE.Vector3(beaconPos.x, beaconPos.y, beaconPos.z);
       const camPosGoal = new THREE.Vector3(beaconPos.x + 2, beaconPos.y + 2, beaconPos.z + 7);
 
-      camera.position.lerp(camPosGoal, 0.08);
-      orbitControlsRef.current.target.lerp(targetVec, 0.08);
+      camera.position.lerp(camPosGoal, 0.22);
+      orbitControlsRef.current.target.lerp(targetVec, 0.22);
       orbitControlsRef.current.update();
     } else if (focusTarget === 'FOCUS_GROUND_STATION') {
       const targetVec = new THREE.Vector3(0, -2, 0);

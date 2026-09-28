@@ -38,12 +38,12 @@ const createDetectionSlice = (set) => ({
 
 // 4. Tracking Slice
 const DEFAULT_PID_GAINS = {
-  kp_pan: 0.04,
-  ki_pan: 0.001,
-  kd_pan: 0.02,
-  kp_tilt: 0.04,
-  ki_tilt: 0.001,
-  kd_tilt: 0.02
+  kp_pan: 0.15,
+  ki_pan: 0.005,
+  kd_pan: 0.04,
+  kp_tilt: 0.15,
+  ki_tilt: 0.005,
+  kd_tilt: 0.04
 };
 
 const createTrackingSlice = (set, get) => ({

@@ -66,10 +66,10 @@ export default function App() {
       const tVel = tilt_vel !== undefined ? tilt_vel : tilt_velocity;
       const [errX, errY] = error_px || [0, 0];
 
-      // Smooth step integration without over-gain multiplier
+      // Fast responsive step integration for high-speed tracking
       if (isTrackingActive && !isPaused) {
-        setPan((prev) => prev + pVel * 1.0);
-        setTilt((prev) => prev + tVel * 1.0);
+        setPan((prev) => prev + pVel * 2.5);
+        setTilt((prev) => prev + tVel * 2.5);
       }
 
       setTrackingState(state);
