@@ -14,6 +14,7 @@ export default function App() {
   const { 
     activeTab, 
     trajectoryPreset, 
+    targetVelocity,
     zoomFov, 
     sensorMode, 
     jitterAmp, 
@@ -174,6 +175,7 @@ export default function App() {
             turbulenceIntensity={turbulence}
             dropLOS={dropLOS}
             trajectoryPreset={trajectoryPreset}
+            targetVelocity={targetVelocity}
             isLocked={trackingStateCurrent === 'TRACKING'}
             trackingState={trackingStateCurrent}
             binaryFrameB64={telemetryStore.getState().binaryFrameB64}

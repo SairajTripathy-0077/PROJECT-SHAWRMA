@@ -101,16 +101,25 @@ function ObserverCameraControl({ focusTarget, beaconPos, orbitControlsRef }) {
  * High-Detail Orbital Satellite Model with 3D Drag Capability
  */
 function OrbitalSatelliteTarget({
-  trajectoryPreset = 'STATIONARY_HOVER',
+  trajectoryPreset: propTrajectory,
   beaconRef,
   onPosUpdate,
   dropLOS = false,
   showTrail = true,
-  targetVelocity = 0.0,
+  targetVelocity: propVelocity,
   isDraggable = false,
   orbitControlsRef
 }) {
-  const { targetManualPos, setTargetManualPos } = useAppStore();
+  const { 
+    targetManualPos, 
+    setTargetManualPos, 
+    trajectoryPreset: storeTrajectory, 
+    targetVelocity: storeVelocity 
+  } = useAppStore();
+
+  const activePreset = storeTrajectory || propTrajectory || 'STATIONARY_HOVER';
+  const activeVelocity = storeVelocity !== undefined ? storeVelocity : (propVelocity !== undefined ? propVelocity : 1.0);
+
   const groupRef = useRef();
   const satelliteBusRef = useRef();
   const trailPointsRef = useRef([]);
@@ -176,7 +185,7 @@ function OrbitalSatelliteTarget({
   const lastPosUpdateRef = useRef(0);
 
   useFrame(({ clock }, delta) => {
-    simTimeRef.current += delta * targetVelocity;
+    simTimeRef.current += delta * activeVelocity;
     const t = simTimeRef.current;
     const now = clock.getElapsedTime();
 
@@ -184,23 +193,23 @@ function OrbitalSatelliteTarget({
     let y = targetManualPos.y;
     let z = targetManualPos.z;
 
-    if (trajectoryPreset === 'STATIONARY_HOVER') {
+    if (activePreset === 'STATIONARY_HOVER') {
       x = targetManualPos.x;
       y = targetManualPos.y;
       z = targetManualPos.z;
-    } else if (trajectoryPreset === 'LINEAR_FLYBY') {
+    } else if (activePreset === 'LINEAR_FLYBY') {
       x = targetManualPos.x + (((t * 4) % 30) - 15);
       y = targetManualPos.y + Math.sin(t * 0.5) * 1.5;
       z = targetManualPos.z + Math.cos(t * 0.3) * 3;
-    } else if (trajectoryPreset === 'FIGURE_8') {
+    } else if (activePreset === 'FIGURE_8') {
       x = targetManualPos.x + Math.sin(t * 0.8) * 8;
       y = targetManualPos.y + Math.sin(t * 1.6) * 3;
       z = targetManualPos.z + Math.cos(t * 0.8) * 5;
-    } else if (trajectoryPreset === 'HIGH_G_EVASIVE') {
+    } else if (activePreset === 'HIGH_G_EVASIVE') {
       x = targetManualPos.x + Math.sin(t * 1.5) * 6 + Math.cos(t * 3.5) * 2;
       y = targetManualPos.y + Math.cos(t * 1.2) * 3 + Math.sin(t * 4.0) * 1.5;
       z = targetManualPos.z + Math.sin(t * 1.0) * 4;
-    } else if (trajectoryPreset === 'ERRATIC') {
+    } else if (activePreset === 'ERRATIC') {
       const step = Math.floor(t * 0.6);
       x = targetManualPos.x + Math.sin(t * 1.2) * 5 + Math.sin(step * 88) * 4;
       y = targetManualPos.y + Math.cos(t * 0.9) * 3 + Math.cos(step * 66) * 2.5;
