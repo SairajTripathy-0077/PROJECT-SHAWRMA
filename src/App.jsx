@@ -1,42 +1,49 @@
 import React, { useState, useEffect, useRef } from 'react';
+import SidebarNav from './components/Sidebar/SidebarNav';
+import ControlPanel from './components/Sidebar/ControlPanel';
+import RheaHeader from './components/RheaHeader';
+import RheaRightPanel from './components/RheaRightPanel';
 import DualViewportScene from './components/DualViewportScene';
-import TuningDeck from './components/TuningDeck';
-import TacticalHUD from './components/TacticalHUD';
+import { useAppStore } from './store/useAppStore';
 import { videoBridge } from './services/videoBridge';
 import { telemetryStore } from './stores/telemetryStore';
-import { benchmarkRunner, BENCHMARK_SCENARIOS } from './services/benchmarkRunner';
+import { benchmarkRunner } from './services/benchmarkRunner';
+import { Sliders, ChevronUp, ChevronDown } from 'lucide-react';
 
 export default function App() {
+  const { 
+    activeTab, 
+    trajectoryPreset, 
+    zoomFov, 
+    sensorMode, 
+    jitterAmp, 
+    jitterFreq, 
+    turbulence, 
+    dropLOS, 
+    pidGains, 
+    setTrackingState,
+    setDropLOS
+  } = useAppStore();
+
+  const [isPaused, setIsPaused] = useState(false);
+  const [viewDimension, setViewDimension] = useState('3D');
+  const [showTuningDrawer, setShowTuningDrawer] = useState(false);
+
   const [pan, setPan] = useState(0.0);
   const [tilt, setTilt] = useState(0.0);
   const [isTrackingActive, setIsTrackingActive] = useState(true);
-  const [trackingState, setTrackingState] = useState('SEARCHING');
-
-  // Multi-Spectral & Zoom Controls
-  const [sensorMode, setSensorMode] = useState(0);
-  const [zoomFov, setZoomFov] = useState(45);
-
-  // Disturbance Deck State
-  const [jitterAmp, setJitterAmp] = useState(0.05);
-  const [jitterFreq, setJitterFreq] = useState(25);
-  const [turbulence, setTurbulence] = useState(0);
-  const [dropLOS, setDropLOS] = useState(false);
-  const [trajectoryPreset, setTrajectoryPreset] = useState('SINUSOIDAL');
-
-  // Critically Damped Dual-Axis PID Gains (Zero Overshooting)
-  const [pidGains, setPidGains] = useState({
-    kp_pan: 0.04,
-    ki_pan: 0.001,
-    kd_pan: 0.02,
-    kp_tilt: 0.04,
-    ki_tilt: 0.001,
-    kd_tilt: 0.02
-  });
 
   const canvasRef = useRef(null);
   const pixelErrorRef = useRef({ x: 0, y: 0 });
   const errorBufferRef = useRef([]);
   const frameCountRef = useRef(0);
+
+  // Automatically open the drawer when a tab is selected
+  useEffect(() => {
+    if (activeTab) {
+      setShowTuningDrawer(true);
+    }
+  }, [activeTab]);
 
   // Initialize Video Bridge with Telemetry Listener
   useEffect(() => {
@@ -59,7 +66,7 @@ export default function App() {
       const [errX, errY] = error_px || [0, 0];
 
       // Smooth step integration without over-gain multiplier
-      if (isTrackingActive) {
+      if (isTrackingActive && !isPaused) {
         setPan((prev) => prev + pVel * 1.0);
         setTilt((prev) => prev + tVel * 1.0);
       }
@@ -103,85 +110,99 @@ export default function App() {
     return () => {
       videoBridge.disconnect();
     };
-  }, [isTrackingActive, pan, tilt]);
+  }, [isTrackingActive, isPaused, pan, tilt, setTrackingState]);
 
   // Main 30 FPS Frame Transmission Loop
   useEffect(() => {
     const frameInterval = setInterval(() => {
-      if (canvasRef.current) {
+      if (canvasRef.current && !isPaused) {
         videoBridge.sendFrame(canvasRef.current, pixelErrorRef.current, dropLOS, pidGains);
       }
     }, 33);
 
     return () => clearInterval(frameInterval);
-  }, [dropLOS, pidGains]);
-
-  const handleUpdatePidGains = async (newGains) => {
-    setPidGains(newGains);
-    if (typeof window !== 'undefined' && window.__TAURI_INTERNALS__) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('update_pid_gains', { gains: newGains });
-      } catch (err) {
-        console.error('[App] Failed to update gains over Tauri IPC:', err);
-      }
-    }
-  };
+  }, [dropLOS, pidGains, isPaused]);
 
   const handlePixelErrorUpdate = (errObj) => {
     pixelErrorRef.current = { x: errObj.x, y: errObj.y };
   };
 
+  const toggleAppFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch((e) => console.log(e));
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch((e) => console.log(e));
+      }
+    }
+  };
+
+  const trackingStateCurrent = useAppStore.getState().trackingState;
+
   return (
-    <div className="w-screen h-screen relative flex flex-col bg-slate-950 overflow-hidden">
-      {/* 3D Dual-Viewport Workstation Scene (62% Height) */}
-      <div className="w-full h-[62%]">
-        <DualViewportScene
-          pan={pan}
-          tilt={tilt}
-          zoomFov={zoomFov}
-          jitterAmp={jitterAmp}
-          jitterFreq={jitterFreq}
-          turbulenceIntensity={turbulence}
-          dropLOS={dropLOS}
-          trajectoryPreset={trajectoryPreset}
-          isLocked={trackingState === 'TRACKING'}
-          trackingState={trackingState}
-          binaryFrameB64={telemetryStore.getState().binaryFrameB64}
-          onPixelErrorUpdate={handlePixelErrorUpdate}
-          onCanvasReady={(c) => (canvasRef.current = c)}
-        />
-      </div>
+    <div className="w-screen h-screen flex flex-col bg-[#06080d] text-slate-200 overflow-hidden font-mono relative">
+      {/* Non-blocking Scanline Visual Effect Overlay */}
+      <div className="fixed inset-0 scanlines pointer-events-none z-50" />
 
-      {/* Bottom Workstation Deck (38% Height) */}
-      <div className="w-full h-[38%] grid grid-cols-12 gap-2 px-2 pb-2">
-        {/* Left: Tuning & Disturbance Control Deck (5 Cols) */}
-        <div className="col-span-5 h-full overflow-y-auto">
-          <TuningDeck
-            pidGains={pidGains}
-            onUpdatePidGains={handleUpdatePidGains}
-            jitterAmp={jitterAmp}
-            onChangeJitterAmp={setJitterAmp}
-            jitterFreq={jitterFreq}
-            onChangeJitterFreq={setJitterFreq}
-            turbulence={turbulence}
-            onChangeTurbulence={setTurbulence}
-            dropLOS={dropLOS}
-            onToggleDropLOS={() => setDropLOS(!dropLOS)}
-            trajectoryPreset={trajectoryPreset}
-            onChangeTrajectoryPreset={setTrajectoryPreset}
-          />
-        </div>
+      {/* Top Header Bar */}
+      <RheaHeader
+        isPaused={isPaused}
+        onTogglePause={() => setIsPaused(!isPaused)}
+        onEndDemo={() => {
+          setPan(0);
+          setTilt(0);
+          setDropLOS(false);
+        }}
+        viewDimension={viewDimension}
+        onChangeDimension={setViewDimension}
+        onToggleFullscreen={toggleAppFullscreen}
+      />
 
-        {/* Right: Zero-Jank Tactical HUD & Link Budget Analytics (7 Cols) */}
-        <div className="col-span-7 h-full overflow-y-auto">
-          <TacticalHUD
-            sensorMode={sensorMode}
-            onChangeSensorMode={setSensorMode}
+      {/* Main Mission Control Dashboard Workspace */}
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* Left Navigation Sidebar with 8 Tabs */}
+        <SidebarNav />
+
+        {/* Center Main Viewport Container */}
+        <main className="flex-1 h-full relative p-2 flex flex-col overflow-hidden bg-[#06080d]">
+          <DualViewportScene
+            pan={pan}
+            tilt={tilt}
             zoomFov={zoomFov}
-            onChangeZoomFov={setZoomFov}
+            jitterAmp={jitterAmp}
+            jitterFreq={jitterFreq}
+            turbulenceIntensity={turbulence}
+            dropLOS={dropLOS}
+            trajectoryPreset={trajectoryPreset}
+            isLocked={trackingStateCurrent === 'TRACKING'}
+            trackingState={trackingStateCurrent}
+            binaryFrameB64={telemetryStore.getState().binaryFrameB64}
+            onPixelErrorUpdate={handlePixelErrorUpdate}
+            onCanvasReady={(c) => (canvasRef.current = c)}
           />
-        </div>
+
+          {/* Floating Control Panel Drawer Trigger Bar */}
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 pointer-events-auto">
+            <button
+              onClick={() => setShowTuningDrawer(!showTuningDrawer)}
+              className="px-4 py-1.5 rounded-full bg-[#080b11]/90 border border-slate-700 hover:border-amber-500 text-slate-200 text-xs font-mono font-bold flex items-center space-x-2 shadow-2xl backdrop-blur-md transition-all glow-amber cursor-pointer"
+            >
+              <Sliders className="w-3.5 h-3.5 text-amber-400" />
+              <span>{showTuningDrawer ? `HIDE CONTROL PANEL (${activeTab})` : `OPEN CONTROL PANEL (${activeTab})`}</span>
+              {showTuningDrawer ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" /> : <ChevronUp className="w-3.5 h-3.5 text-slate-400" />}
+            </button>
+          </div>
+
+          {/* Slide-Up Dynamic Control Panel Drawer */}
+          {showTuningDrawer && (
+            <div className="absolute bottom-0 left-0 right-0 z-40 p-2 max-h-[48%] overflow-y-auto pointer-events-auto select-auto">
+              <ControlPanel />
+            </div>
+          )}
+        </main>
+
+        {/* Right Telemetry & Event Log Panel */}
+        <RheaRightPanel trajectoryPreset={trajectoryPreset} />
       </div>
     </div>
   );

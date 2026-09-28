@@ -2,7 +2,7 @@ import React, { useRef, useMemo, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { Stars, OrbitControls, PerspectiveCamera, Line } from '@react-three/drei';
 import * as THREE from 'three';
-import { Eye, Zap, EyeOff, Radio } from 'lucide-react';
+import { Eye, Zap, EyeOff, Radio, Target, Maximize2, Minimize2, Monitor } from 'lucide-react';
 
 /**
  * Platform Jitter procedural noise helper
@@ -42,9 +42,64 @@ function CameraFrustumPyramid({ fov = 45, far = 20 }) {
 }
 
 /**
+ * Viewport A Observer Camera Dynamic Zoom & Object Tracking Controller
+ */
+function ObserverCameraControl({ focusTarget, beaconPos, orbitControlsRef }) {
+  const lastTargetRef = useRef(focusTarget);
+  const transitioningRef = useRef(false);
+
+  React.useEffect(() => {
+    if (lastTargetRef.current !== focusTarget) {
+      lastTargetRef.current = focusTarget;
+      if (focusTarget === 'FREE_ORBIT') {
+        transitioningRef.current = true;
+        const timer = setTimeout(() => { transitioningRef.current = false; }, 800);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [focusTarget]);
+
+  useFrame(({ camera }) => {
+    if (!orbitControlsRef.current) return;
+
+    if (focusTarget === 'TRACK_SATELLITE' && beaconPos) {
+      const targetVec = new THREE.Vector3(beaconPos.x, beaconPos.y, beaconPos.z);
+      const camPosGoal = new THREE.Vector3(beaconPos.x + 2, beaconPos.y + 2, beaconPos.z + 7);
+
+      camera.position.lerp(camPosGoal, 0.08);
+      orbitControlsRef.current.target.lerp(targetVec, 0.08);
+      orbitControlsRef.current.update();
+    } else if (focusTarget === 'FOCUS_GROUND_STATION') {
+      const targetVec = new THREE.Vector3(0, -2, 0);
+      const camPosGoal = new THREE.Vector3(0, 0, 8);
+
+      camera.position.lerp(camPosGoal, 0.08);
+      orbitControlsRef.current.target.lerp(targetVec, 0.08);
+      orbitControlsRef.current.update();
+    } else if (focusTarget === 'BEAM_PATH_VIEW' && beaconPos) {
+      const midVec = new THREE.Vector3(beaconPos.x * 0.5, (beaconPos.y - 4) * 0.5, beaconPos.z * 0.5);
+      const camPosGoal = new THREE.Vector3(15, 2, -10);
+
+      camera.position.lerp(camPosGoal, 0.08);
+      orbitControlsRef.current.target.lerp(midVec, 0.08);
+      orbitControlsRef.current.update();
+    } else if (focusTarget === 'FREE_ORBIT' && transitioningRef.current) {
+      const defaultTarget = new THREE.Vector3(0, 0, -10);
+      const defaultCamPos = new THREE.Vector3(22, 16, 25);
+
+      camera.position.lerp(defaultCamPos, 0.08);
+      orbitControlsRef.current.target.lerp(defaultTarget, 0.08);
+      orbitControlsRef.current.update();
+    }
+  });
+
+  return null;
+}
+
+/**
  * High-Detail Orbital Satellite Model
  */
-function OrbitalSatelliteTarget({ trajectoryPreset = 'SINUSOIDAL', beaconRef, onPosUpdate, dropLOS = false }) {
+function OrbitalSatelliteTarget({ trajectoryPreset = 'SINUSOIDAL', beaconRef, onPosUpdate, dropLOS = false, showTrail = true }) {
   const groupRef = useRef();
   const satelliteBusRef = useRef();
   const trailPointsRef = useRef([]);
@@ -179,7 +234,7 @@ function OrbitalSatelliteTarget({ trajectoryPreset = 'SINUSOIDAL', beaconRef, on
         </group>
       </group>
 
-      {trailPath.length > 2 && (
+      {showTrail && trailPath.length > 2 && (
         <Line points={trailPath} color="#00ffcc" lineWidth={2} transparent opacity={0.6} />
       )}
     </>
@@ -208,15 +263,12 @@ function OpticalLaserBeam({ isLocked, beaconPos }) {
 
 /**
  * High-Detail Kinematic Ground Station Observatory Telescope Complex
- * Features: Dynamic Real-Time Pan (Azimuth) & Tilt (Elevation) Tracking Motion,
- * Carbon-Fiber Optics, Glowing Aperture Rings, Industrial Yoke Servos
  */
 function KinematicGroundStationObservatory({ pan = 0, tilt = 0 }) {
   const panMountRef = useRef();
   const tiltMountRef = useRef();
 
   useFrame(() => {
-    // Kinematic Tracking Rotation: Pan (Y-axis Azimuth) and Tilt (X-axis Elevation)
     if (panMountRef.current) {
       panMountRef.current.rotation.y = THREE.MathUtils.lerp(
         panMountRef.current.rotation.y,
@@ -235,13 +287,13 @@ function KinematicGroundStationObservatory({ pan = 0, tilt = 0 }) {
 
   return (
     <group position={[0, -4, 0]}>
-      {/* 1. Reinforced Heavy Foundation Base */}
+      {/* Foundation Base */}
       <mesh position={[0, -0.6, 0]}>
         <cylinderGeometry args={[3.2, 3.8, 1.2, 8]} />
         <meshStandardMaterial color="#0f172a" metalness={0.8} roughness={0.4} />
       </mesh>
 
-      {/* Perimeter Status Warning LED Markers */}
+      {/* LED Markers */}
       {[0, 45, 90, 135, 180, 225, 270, 315].map((angle, idx) => {
         const rad = (angle * Math.PI) / 180;
         const x = Math.cos(rad) * 3.3;
@@ -254,21 +306,18 @@ function KinematicGroundStationObservatory({ pan = 0, tilt = 0 }) {
         );
       })}
 
-      {/* Base Ring Plate */}
       <mesh position={[0, 0.2, 0]}>
         <cylinderGeometry args={[2.0, 2.4, 0.4, 16]} />
         <meshStandardMaterial color="#1e293b" metalness={0.9} roughness={0.2} />
       </mesh>
 
-      {/* 2. Kinematic Pan Mount Node (Y-Axis Azimuth Motorized Rotation) */}
+      {/* Kinematic Pan Mount Node (Y-axis Azimuth) */}
       <group ref={panMountRef} position={[0, 0.4, 0]}>
-        {/* Azimuth Turret Ring */}
         <mesh position={[0, 0.2, 0]}>
           <cylinderGeometry args={[1.5, 1.7, 0.6, 24]} />
           <meshStandardMaterial color="#334155" metalness={0.9} roughness={0.2} />
         </mesh>
 
-        {/* Dual Vertical Yoke Fork Arms */}
         <mesh position={[-0.9, 0.8, 0]}>
           <boxGeometry args={[0.3, 1.2, 0.8]} />
           <meshStandardMaterial color="#1e293b" metalness={0.9} roughness={0.3} />
@@ -278,7 +327,6 @@ function KinematicGroundStationObservatory({ pan = 0, tilt = 0 }) {
           <meshStandardMaterial color="#1e293b" metalness={0.9} roughness={0.3} />
         </mesh>
 
-        {/* Azimuth Servo Motors */}
         <mesh position={[-1.1, 0.8, 0]} rotation={[0, 0, Math.PI / 2]}>
           <cylinderGeometry args={[0.25, 0.25, 0.3, 16]} />
           <meshStandardMaterial color="#00f3ff" emissive="#00f3ff" emissiveIntensity={1.5} />
@@ -288,16 +336,14 @@ function KinematicGroundStationObservatory({ pan = 0, tilt = 0 }) {
           <meshStandardMaterial color="#00f3ff" emissive="#00f3ff" emissiveIntensity={1.5} />
         </mesh>
 
-        {/* 3. Kinematic Tilt Mount Node (X-Axis Elevation Motorized Rotation) */}
+        {/* Kinematic Tilt Mount Node (X-axis Elevation) */}
         <group ref={tiltMountRef} position={[0, 1.0, 0]}>
-          {/* Main Carbon-Fiber Telescope Barrel */}
           <group position={[0, 0, -0.6]} rotation={[Math.PI / 2, 0, 0]}>
             <mesh>
               <cylinderGeometry args={[0.55, 0.65, 2.2, 32]} />
               <meshStandardMaterial color="#0f172a" metalness={0.9} roughness={0.15} />
             </mesh>
 
-            {/* Anodized Cyan Metallic Accent Rings */}
             <mesh position={[0, 0.7, 0]}>
               <torusGeometry args={[0.66, 0.04, 16, 32]} />
               <meshStandardMaterial color="#00f3ff" emissive="#00f3ff" emissiveIntensity={2.5} />
@@ -307,7 +353,6 @@ function KinematicGroundStationObservatory({ pan = 0, tilt = 0 }) {
               <meshStandardMaterial color="#00f3ff" emissive="#00f3ff" emissiveIntensity={2.5} />
             </mesh>
 
-            {/* Heat Sink Cooling Radiator Fins */}
             {[...Array(6)].map((_, i) => (
               <mesh key={i} position={[0, -0.3 + i * 0.12, 0]}>
                 <torusGeometry args={[0.62, 0.02, 12, 24]} />
@@ -315,35 +360,23 @@ function KinematicGroundStationObservatory({ pan = 0, tilt = 0 }) {
               </mesh>
             ))}
 
-            {/* Front Aperture Optics & Anti-Reflective Coated Lens */}
             <group position={[0, 1.12, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-              {/* Outer Lens Shroud Frame */}
               <mesh>
                 <cylinderGeometry args={[0.62, 0.62, 0.15, 32]} />
                 <meshStandardMaterial color="#1e293b" metalness={0.9} roughness={0.1} />
               </mesh>
-              {/* Glowing Emerald-Cyan Optical Element */}
               <mesh position={[0, 0, 0.08]}>
                 <circleGeometry args={[0.55, 32]} />
-                <meshStandardMaterial
-                  color="#00ffcc"
-                  emissive="#00ffcc"
-                  emissiveIntensity={3.5}
-                  roughness={0.1}
-                  transparent
-                  opacity={0.9}
-                />
+                <meshStandardMaterial color="#00ffcc" emissive="#00ffcc" emissiveIntensity={3.5} roughness={0.1} transparent opacity={0.9} />
               </mesh>
             </group>
 
-            {/* Secondary Parallel Laser Diode Transceiver Guide Tube */}
             <mesh position={[0.48, 0.2, 0]}>
               <cylinderGeometry args={[0.14, 0.14, 2.0, 16]} />
               <meshStandardMaterial color="#0284c7" emissive="#0284c7" emissiveIntensity={0.5} />
             </mesh>
           </group>
 
-          {/* Elevation Counterweight Balance Bars */}
           <mesh position={[0, -0.4, 0.8]}>
             <boxGeometry args={[0.8, 0.3, 0.5]} />
             <meshStandardMaterial color="#334155" metalness={0.9} />
@@ -351,7 +384,6 @@ function KinematicGroundStationObservatory({ pan = 0, tilt = 0 }) {
         </group>
       </group>
 
-      {/* Meteorological Sensor Mast */}
       <group position={[-2.4, 0.4, 2.0]}>
         <mesh position={[0, 0.8, 0]}>
           <cylinderGeometry args={[0.08, 0.12, 2.4, 8]} />
@@ -466,6 +498,72 @@ function BoresightGimbalRig({
   );
 }
 
+function CustomViewFocusDropdown({ focusTarget, setFocusTarget }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef(null);
+
+  const options = [
+    { value: 'FREE_ORBIT', label: 'Free Orbit' },
+    { value: 'TRACK_SATELLITE', label: 'Satellite' },
+    { value: 'FOCUS_GROUND_STATION', label: 'Ground Station' },
+    { value: 'BEAM_PATH_VIEW', label: 'Laser Vector' },
+  ];
+
+  const currentLabel = options.find((o) => o.value === focusTarget)?.label || 'Free Orbit';
+
+  React.useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (containerRef.current && !containerRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative z-50 pointer-events-auto"
+      onMouseDown={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="bg-slate-950/90 p-1 rounded border border-slate-700 flex items-center space-x-1 font-mono text-[10px]">
+        <span className="text-slate-400 font-bold px-1 select-none">View:</span>
+        <button
+          type="button"
+          onClick={() => setIsOpen(!isOpen)}
+          className="bg-slate-900 border border-slate-700 text-slate-200 px-2 py-0.5 rounded flex items-center space-x-1 hover:border-amber-500 font-bold cursor-pointer transition-all"
+        >
+          <span>{currentLabel}</span>
+          <span className="text-[8px] text-slate-400 ml-1">▼</span>
+        </button>
+      </div>
+
+      {isOpen && (
+        <div className="absolute top-full right-0 mt-1 w-36 bg-slate-950/95 border border-slate-700 rounded shadow-2xl py-1 z-50 font-mono text-[10px] backdrop-blur-md">
+          {options.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => {
+                setFocusTarget(option.value);
+                setIsOpen(false);
+              }}
+              className={`w-full text-left px-2.5 py-1 hover:bg-amber-500/20 hover:text-amber-300 font-semibold transition-all cursor-pointer ${
+                focusTarget === option.value ? 'text-amber-400 bg-slate-900 font-bold border-l-2 border-amber-500' : 'text-slate-300'
+              }`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function DualViewportScene({
   pan = 0,
   tilt = 0,
@@ -483,112 +581,265 @@ export default function DualViewportScene({
 }) {
   const beaconRef = useRef();
   const boresightCamRef = useRef();
+  const orbitControlsRef = useRef();
   const [beaconPos, setBeaconPos] = useState(null);
   const [showPIP, setShowPIP] = useState(true);
+  const [focusTarget, setFocusTarget] = useState('FREE_ORBIT');
+  const [fullscreenMode, setFullscreenMode] = useState('SPLIT'); // 'SPLIT', 'VIEWPORT_A', 'VIEWPORT_B'
+  const [isFullscreenApp, setIsFullscreenApp] = useState(false);
+
+  const toggleAppFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch((e) => console.log(e));
+      setIsFullscreenApp(true);
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch((e) => console.log(e));
+      }
+      setIsFullscreenApp(false);
+    }
+  };
 
   return (
-    <div className="w-full h-full relative bg-slate-950 grid grid-cols-12 gap-2 p-2 select-none">
-      {/* VIEWPORT A: Global Tactical 3D Observer */}
-      <div className="col-span-7 relative rounded-xl overflow-hidden border border-slate-800 bg-slate-950">
-        <div className="absolute top-3 left-3 z-10 glass-panel px-3 py-1.5 rounded-lg flex items-center space-x-2 border border-slate-700">
-          <Radio className="w-4 h-4 text-cyan-400 animate-pulse" />
-          <span className="text-xs font-mono font-bold text-slate-200">
-            VIEWPORT A: KINEMATIC GROUND OBSERVATORY & ORBITAL SATELLITE
-          </span>
+    <div className="w-full h-full relative bg-[#080b11] border border-slate-800 flex flex-col justify-between select-none p-2 space-y-2">
+      {/* Top Viewport Header Strip */}
+      <div className="flex justify-between items-center px-3 py-1.5 bg-slate-950/80 border border-slate-800 rounded">
+        <div>
+          <h2 className="text-xs font-bold font-mono text-slate-100 tracking-wider">3D DIGITAL TWIN</h2>
+          <p className="text-[9px] font-mono text-slate-500">Real-time FSOC Simulation</p>
         </div>
-
-        <Canvas gl={{ antialias: true }}>
-          <ambientLight intensity={0.4} />
-          <directionalLight position={[15, 25, 20]} intensity={1.8} color="#ffffff" />
-          <Stars radius={120} depth={50} count={6000} factor={4} saturation={0} fade speed={1} />
-          <OrbitControls makeDefault enablePan={true} maxPolarAngle={Math.PI / 2 + 0.1} />
-
-          <PerspectiveCamera makeDefault fov={50} position={[22, 16, 25]} />
-          
-          {/* Kinematic Ground Station Telescope with Real-Time Pan/Tilt Tracking */}
-          <KinematicGroundStationObservatory pan={pan} tilt={tilt} />
-
-          <OrbitalSatelliteTarget
-            trajectoryPreset={trajectoryPreset}
-            beaconRef={beaconRef}
-            onPosUpdate={(pos) => setBeaconPos(pos)}
-            dropLOS={dropLOS}
-          />
-
-          <OpticalLaserBeam isLocked={isLocked} beaconPos={beaconPos} />
-          <EnvironmentalDisturbances turbulenceIntensity={turbulenceIntensity} dropLOS={dropLOS} />
-
-          <gridHelper args={[100, 100, '#1e293b', '#0f172a']} position={[0, -4.5, 0]} />
-        </Canvas>
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={() => setFocusTarget('FREE_ORBIT')}
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="px-2 py-1 bg-slate-900 border border-slate-700 text-slate-300 hover:text-amber-400 text-[10px] font-mono font-bold rounded cursor-pointer"
+          >
+            :: VIEW
+          </button>
+        </div>
       </div>
 
-      {/* VIEWPORT B: Gimbal Sensor Boresight Feed */}
-      <div className="col-span-5 relative rounded-xl overflow-hidden border border-cyan-500/30 bg-slate-950">
-        <div className="absolute top-3 left-3 z-10 glass-panel px-3 py-1.5 rounded-lg flex items-center space-x-2 border border-cyan-500/40">
-          <Zap className="w-4 h-4 text-amber-400 animate-pulse" />
-          <span className="text-xs font-mono font-bold text-cyan-300">
-            VIEWPORT B: SENSOR BORESIGHT (FOV {zoomFov}°)
+      {/* Main Viewport Stage Area */}
+      <div className="flex-1 relative grid grid-cols-12 gap-2 overflow-hidden rounded border border-slate-800/80">
+        {/* VIEWPORT A: Global Tactical 3D Observer */}
+        <div
+          className={`relative overflow-hidden bg-[#05070c] transition-all duration-300 ${
+            fullscreenMode === 'VIEWPORT_A'
+              ? 'col-span-12 h-full z-30'
+              : fullscreenMode === 'VIEWPORT_B'
+              ? 'hidden'
+              : 'col-span-7'
+          }`}
+        >
+          {/* Top-Left Locked Badge Pill (Matching Reference) */}
+          <div className="absolute top-3 left-3 z-20 flex items-center space-x-2">
+            <div className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold flex items-center space-x-1.5 border ${
+              isLocked
+                ? 'bg-emerald-950/80 text-emerald-400 border-emerald-500/50 glow-emerald'
+                : 'bg-amber-950/80 text-amber-400 border-amber-500/50 glow-amber'
+            }`}>
+              <span className={`w-1.5 h-1.5 rounded-sm ${isLocked ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+              <span>{isLocked ? 'LOCKED' : 'SEARCHING'}</span>
+            </div>
+          </div>
+
+          {/* Top-Right Controls: Focus Selector & Fullscreen Toggle Buttons */}
+          <div
+            className="absolute top-3 right-3 z-50 flex items-center space-x-2 pointer-events-auto"
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Custom Tactical View Target Selector Dropdown */}
+            <CustomViewFocusDropdown focusTarget={focusTarget} setFocusTarget={setFocusTarget} />
+
+            {/* Viewport A Maximize / Restore Button */}
+            <button
+              onClick={() => setFullscreenMode(fullscreenMode === 'VIEWPORT_A' ? 'SPLIT' : 'VIEWPORT_A')}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              title="Maximize Viewport A"
+              className="bg-slate-950/90 p-1.5 rounded border border-slate-700 text-slate-300 hover:text-amber-400 cursor-pointer"
+            >
+              {fullscreenMode === 'VIEWPORT_A' ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+            </button>
+
+            {/* App-Wide OS Fullscreen Button */}
+            <button
+              onClick={toggleAppFullscreen}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              title="Toggle OS Fullscreen"
+              className="bg-slate-950/90 p-1.5 rounded border border-slate-700 text-slate-300 hover:text-amber-400 cursor-pointer"
+            >
+              <Monitor className="w-3 h-3" />
+            </button>
+          </div>
+
+          <Canvas gl={{ antialias: true }}>
+            <ambientLight intensity={0.4} />
+            <directionalLight position={[15, 25, 20]} intensity={1.8} color="#ffffff" />
+            <Stars radius={120} depth={50} count={6000} factor={4} saturation={0} fade speed={1} />
+            <OrbitControls ref={orbitControlsRef} makeDefault enablePan={true} maxPolarAngle={Math.PI / 2 + 0.1} />
+
+            <PerspectiveCamera makeDefault fov={50} position={[22, 16, 25]} />
+            
+            <ObserverCameraControl
+              focusTarget={focusTarget}
+              beaconPos={beaconPos}
+              orbitControlsRef={orbitControlsRef}
+            />
+
+            <KinematicGroundStationObservatory pan={pan} tilt={tilt} />
+
+            <OrbitalSatelliteTarget
+              trajectoryPreset={trajectoryPreset}
+              beaconRef={beaconRef}
+              onPosUpdate={(pos) => setBeaconPos(pos)}
+              dropLOS={dropLOS}
+              showTrail={showPIP}
+            />
+
+            <OpticalLaserBeam isLocked={isLocked} beaconPos={beaconPos} />
+            <EnvironmentalDisturbances turbulenceIntensity={turbulenceIntensity} dropLOS={dropLOS} />
+
+            <gridHelper args={[100, 100, '#1e293b', '#0f172a']} position={[0, -4.5, 0]} />
+          </Canvas>
+
+
+        </div>
+
+        {/* VIEWPORT B: Gimbal Sensor Boresight Feed */}
+        <div
+          className={`relative overflow-hidden bg-[#05070c] border-l border-slate-800 transition-all duration-300 ${
+            fullscreenMode === 'VIEWPORT_B'
+              ? 'col-span-12 h-full z-30'
+              : fullscreenMode === 'VIEWPORT_A'
+              ? 'hidden'
+              : 'col-span-5'
+          }`}
+        >
+          <div className="absolute top-3 left-3 z-10 bg-slate-950/90 px-2.5 py-1 rounded border border-slate-700 flex items-center space-x-1.5">
+            <Zap className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+            <span className="text-[10px] font-mono font-bold text-slate-200">
+              BORESIGHT (FOV {zoomFov}°)
+            </span>
+          </div>
+
+          {/* Viewport B Top Controls: PIP & Maximize */}
+          <div
+            className="absolute top-3 right-3 z-50 flex items-center space-x-1.5 pointer-events-auto"
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setShowPIP(!showPIP)}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              className="bg-slate-950/90 px-2 py-1 rounded text-[10px] font-mono text-slate-300 border border-slate-700 hover:text-amber-400 flex items-center cursor-pointer"
+            >
+              {showPIP ? <Eye className="w-3 h-3 inline mr-1" /> : <EyeOff className="w-3 h-3 inline mr-1" />}
+              {showPIP ? 'HIDE PIP' : 'SHOW PIP'}
+            </button>
+
+            <button
+              onClick={() => setFullscreenMode(fullscreenMode === 'VIEWPORT_B' ? 'SPLIT' : 'VIEWPORT_B')}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              title="Maximize Viewport B"
+              className="bg-slate-950/90 p-1.5 rounded border border-slate-700 text-slate-300 hover:text-amber-400 cursor-pointer"
+            >
+              {fullscreenMode === 'VIEWPORT_B' ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+            </button>
+          </div>
+
+          <Canvas
+            gl={{ preserveDrawingBuffer: true, antialias: true }}
+            onCreated={({ gl }) => {
+              if (onCanvasReady) onCanvasReady(gl.domElement);
+            }}
+          >
+            <ambientLight intensity={0.3} />
+            <directionalLight position={[10, 20, 15]} intensity={1.2} color="#ffffff" />
+            <Stars radius={100} depth={50} count={4000} factor={3} fade />
+
+            <BoresightGimbalRig
+              pan={pan}
+              tilt={tilt}
+              jitterAmp={jitterAmp}
+              jitterFreq={jitterFreq}
+              boresightCamRef={boresightCamRef}
+              beaconRef={beaconRef}
+              zoomFov={zoomFov}
+              onPixelErrorUpdate={onPixelErrorUpdate}
+            />
+
+            <OrbitalSatelliteTarget trajectoryPreset={trajectoryPreset} beaconRef={beaconRef} dropLOS={dropLOS} showTrail={showPIP} />
+            <EnvironmentalDisturbances turbulenceIntensity={turbulenceIntensity} dropLOS={dropLOS} />
+          </Canvas>
+
+          {/* Reticle Overlay */}
+          <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+            <div className="relative w-52 h-52 border border-slate-700/60 rounded-full flex items-center justify-center">
+              <div className="absolute w-full h-[1px] bg-slate-700/60" />
+              <div className="absolute h-full w-[1px] bg-slate-700/60" />
+              <div className="w-3.5 h-3.5 border border-emerald-400 rounded-full animate-ping" />
+              <div className="absolute top-2 left-2 text-[9px] font-mono text-cyan-400">
+                STATE: {trackingState}
+              </div>
+            </div>
+          </div>
+
+          {/* OpenCV Binary PIP Feed */}
+          {showPIP && binaryFrameB64 && (
+            <div className="absolute bottom-3 right-3 z-20 w-32 h-24 bg-slate-950 p-1 rounded border border-emerald-500/40 flex flex-col justify-between">
+              <div className="text-[8px] font-mono text-emerald-400 font-bold px-1">
+                OPENCV THRESHOLD PIP
+              </div>
+              <img
+                src={`data:image/jpeg;base64,${binaryFrameB64}`}
+                alt="OpenCV Binary PIP Feed"
+                className="w-full h-16 object-cover rounded bg-black"
+              />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Bottom Entities Status Bar (Matching Reference Screenshot) */}
+      <div className="flex justify-between items-center px-3 py-1.5 bg-slate-950/80 border border-slate-800 rounded text-[10px] font-mono">
+        <div className="flex items-center space-x-3 text-slate-400">
+          <span className="text-slate-500 font-bold">ENTITIES</span>
+          <span className="flex items-center space-x-1">
+            <span className="w-1.5 h-1.5 bg-emerald-400 rounded-sm" />
+            <span className="text-slate-300">SAT-01</span>
+          </span>
+          <span className="flex items-center space-x-1">
+            <span className="w-1.5 h-1.5 bg-cyan-400 rounded-sm" />
+            <span className="text-slate-300">FSOC-CAM-01</span>
+          </span>
+          <span className="flex items-center space-x-1">
+            <span className="w-1.5 h-1.5 bg-amber-400 rounded-sm" />
+            <span className="text-slate-300">TARGET-01</span>
+          </span>
+          <span className="flex items-center space-x-1">
+            <span className="w-1.5 h-1.5 bg-rose-400 rounded-sm" />
+            <span className="text-slate-300">BEACON-01</span>
           </span>
         </div>
 
-        <button
-          onClick={() => setShowPIP(!showPIP)}
-          className="absolute top-3 right-3 z-20 glass-panel px-2 py-1 rounded text-[11px] font-mono text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/20"
-        >
-          {showPIP ? <Eye className="w-3.5 h-3.5 inline mr-1" /> : <EyeOff className="w-3.5 h-3.5 inline mr-1" />}
-          {showPIP ? 'HIDE PIP' : 'SHOW PIP'}
-        </button>
-
-        <Canvas
-          gl={{ preserveDrawingBuffer: true, antialias: true }}
-          onCreated={({ gl }) => {
-            if (onCanvasReady) onCanvasReady(gl.domElement);
-          }}
-        >
-          <ambientLight intensity={0.3} />
-          <directionalLight position={[10, 20, 15]} intensity={1.2} color="#ffffff" />
-          <Stars radius={100} depth={50} count={4000} factor={3} fade />
-
-          <BoresightGimbalRig
-            pan={pan}
-            tilt={tilt}
-            jitterAmp={jitterAmp}
-            jitterFreq={jitterFreq}
-            boresightCamRef={boresightCamRef}
-            beaconRef={beaconRef}
-            zoomFov={zoomFov}
-            onPixelErrorUpdate={onPixelErrorUpdate}
-          />
-
-          <OrbitalSatelliteTarget trajectoryPreset={trajectoryPreset} beaconRef={beaconRef} dropLOS={dropLOS} />
-          <EnvironmentalDisturbances turbulenceIntensity={turbulenceIntensity} dropLOS={dropLOS} />
-        </Canvas>
-
-        {/* Reticle Overlay */}
-        <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-          <div className="relative w-64 h-64 border border-cyan-500/30 rounded-full flex items-center justify-center">
-            <div className="absolute w-full h-[1px] bg-cyan-500/40" />
-            <div className="absolute h-full w-[1px] bg-cyan-500/40" />
-            <div className="w-4 h-4 border border-emerald-400 rounded-full animate-ping" />
-            <div className="absolute top-2 left-2 text-[10px] font-mono text-cyan-400">
-              STATE: {trackingState}
-            </div>
-          </div>
+        <div className="flex items-center space-x-2 text-slate-400">
+          <button
+            onClick={() => setFocusTarget(focusTarget === 'TRACK_SATELLITE' ? 'FREE_ORBIT' : 'TRACK_SATELLITE')}
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="px-2 py-0.5 bg-slate-900 border border-slate-700 text-slate-300 hover:text-amber-400 rounded font-bold cursor-pointer"
+          >
+            - TARGET
+          </button>
         </div>
-
-        {/* OpenCV Binary PIP Feed */}
-        {showPIP && binaryFrameB64 && (
-          <div className="absolute bottom-4 right-4 z-20 w-36 h-28 glass-panel p-1 rounded-lg border border-emerald-500/40 flex flex-col justify-between">
-            <div className="text-[9px] font-mono text-emerald-400 font-bold px-1">
-              OPENCV THRESHOLD PIP
-            </div>
-            <img
-              src={`data:image/jpeg;base64,${binaryFrameB64}`}
-              alt="OpenCV Binary PIP Feed"
-              className="w-full h-20 object-cover rounded bg-black"
-            />
-          </div>
-        )}
       </div>
     </div>
   );
