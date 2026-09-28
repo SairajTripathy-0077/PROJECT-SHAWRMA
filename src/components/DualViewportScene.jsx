@@ -2,7 +2,7 @@ import React, { useRef, useMemo, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { Stars, OrbitControls, PerspectiveCamera, Line } from '@react-three/drei';
 import * as THREE from 'three';
-import { Eye, Zap, EyeOff } from 'lucide-react';
+import { Eye, Zap, EyeOff, Radio } from 'lucide-react';
 
 /**
  * Platform Jitter procedural noise helper
@@ -42,10 +42,11 @@ function CameraFrustumPyramid({ fov = 45, far = 20 }) {
 }
 
 /**
- * Airborne Target Beacon with Trajectory Trail & Presets
+ * High-Detail Orbital Satellite Model
  */
-function AirborneTarget({ trajectoryPreset = 'SINUSOIDAL', beaconRef, onPosUpdate, dropLOS = false }) {
-  const meshRef = useRef();
+function OrbitalSatelliteTarget({ trajectoryPreset = 'SINUSOIDAL', beaconRef, onPosUpdate, dropLOS = false }) {
+  const groupRef = useRef();
+  const satelliteBusRef = useRef();
   const trailPointsRef = useRef([]);
   const [trailPath, setTrailPath] = useState([]);
 
@@ -77,10 +78,15 @@ function AirborneTarget({ trajectoryPreset = 'SINUSOIDAL', beaconRef, onPosUpdat
       z = -20 + Math.sin(t * 0.4) * 4;
     }
 
-    if (meshRef.current) {
-      meshRef.current.position.set(x, y, z);
-      if (beaconRef) beaconRef.current = meshRef.current;
-      if (onPosUpdate) onPosUpdate(meshRef.current.position);
+    if (groupRef.current) {
+      groupRef.current.position.set(x, y, z);
+      if (beaconRef) beaconRef.current = groupRef.current;
+      if (onPosUpdate) onPosUpdate(groupRef.current.position);
+
+      if (satelliteBusRef.current) {
+        satelliteBusRef.current.rotation.y = t * 0.3;
+        satelliteBusRef.current.rotation.z = Math.sin(t * 0.2) * 0.15;
+      }
 
       const currentPos = [x, y, z];
       trailPointsRef.current.push(currentPos);
@@ -95,28 +101,82 @@ function AirborneTarget({ trajectoryPreset = 'SINUSOIDAL', beaconRef, onPosUpdat
 
   return (
     <>
-      <group ref={meshRef} position={[0, 3, -20]}>
-        <mesh>
-          <cylinderGeometry args={[0.5, 0.5, 0.15, 8]} />
-          <meshStandardMaterial color="#1e293b" metalness={0.9} roughness={0.2} />
-        </mesh>
+      <group ref={groupRef} position={[0, 3, -20]}>
+        <group ref={satelliteBusRef}>
+          {/* Main Bus Body */}
+          <mesh position={[0, 0, 0]}>
+            <boxGeometry args={[1.2, 1.2, 1.6]} />
+            <meshStandardMaterial color="#f59e0b" metalness={0.9} roughness={0.2} emissive="#b45309" emissiveIntensity={0.2} />
+          </mesh>
 
-        <mesh position={[0, 0, 0]}>
-          <sphereGeometry args={[0.35, 32, 32]} />
-          <meshStandardMaterial
-            color="#00ffcc"
-            emissive="#00ffcc"
-            emissiveIntensity={dropLOS ? 0.2 : 3.5}
-            roughness={0.1}
-          />
-        </mesh>
+          {/* Instrument Bevel Trim */}
+          <mesh position={[0, 0, 0]}>
+            <boxGeometry args={[1.25, 0.4, 0.4]} />
+            <meshStandardMaterial color="#334155" metalness={0.8} roughness={0.3} />
+          </mesh>
 
-        <mesh scale={[1.4, 1.4, 1.4]}>
-          <sphereGeometry args={[0.35, 16, 16]} />
-          <meshBasicMaterial color={dropLOS ? "#f59e0b" : "#38bdf8"} transparent opacity={0.35} wireframe />
-        </mesh>
+          {/* Left Solar Panel Wing */}
+          <group position={[-2.4, 0, 0]}>
+            <mesh position={[1.0, 0, 0]} rotation={[0, 0, Math.PI / 2]}>
+              <cylinderGeometry args={[0.06, 0.06, 0.8, 8]} />
+              <meshStandardMaterial color="#64748b" metalness={0.9} />
+            </mesh>
+            <mesh>
+              <boxGeometry args={[1.8, 0.04, 2.2]} />
+              <meshStandardMaterial color="#0284c7" metalness={0.8} roughness={0.1} />
+            </mesh>
+            <mesh scale={[1.02, 1.02, 1.02]}>
+              <boxGeometry args={[1.8, 0.04, 2.2]} />
+              <meshBasicMaterial color="#38bdf8" wireframe transparent opacity={0.3} />
+            </mesh>
+          </group>
 
-        {!dropLOS && <pointLight color="#00ffcc" intensity={10} distance={35} decay={1} />}
+          {/* Right Solar Panel Wing */}
+          <group position={[2.4, 0, 0]}>
+            <mesh position={[-1.0, 0, 0]} rotation={[0, 0, Math.PI / 2]}>
+              <cylinderGeometry args={[0.06, 0.06, 0.8, 8]} />
+              <meshStandardMaterial color="#64748b" metalness={0.9} />
+            </mesh>
+            <mesh>
+              <boxGeometry args={[1.8, 0.04, 2.2]} />
+              <meshStandardMaterial color="#0284c7" metalness={0.8} roughness={0.1} />
+            </mesh>
+            <mesh scale={[1.02, 1.02, 1.02]}>
+              <boxGeometry args={[1.8, 0.04, 2.2]} />
+              <meshBasicMaterial color="#38bdf8" wireframe transparent opacity={0.3} />
+            </mesh>
+          </group>
+
+          {/* Parabolic Antenna Dish */}
+          <group position={[0, 0.9, 0]} rotation={[-Math.PI / 4, 0, 0]}>
+            <mesh>
+              <cylinderGeometry args={[0.7, 0.1, 0.3, 24, 1, true]} />
+              <meshStandardMaterial color="#e2e8f0" metalness={0.9} roughness={0.1} side={THREE.DoubleSide} />
+            </mesh>
+            <mesh position={[0, 0.3, 0]}>
+              <cylinderGeometry args={[0.04, 0.04, 0.4, 8]} />
+              <meshStandardMaterial color="#0f172a" metalness={0.9} />
+            </mesh>
+          </group>
+
+          {/* FSOC Optical Laser Transceiver Payload */}
+          <group position={[0, -0.65, 0.4]}>
+            <mesh>
+              <cylinderGeometry args={[0.3, 0.3, 0.4, 16]} />
+              <meshStandardMaterial color="#0f172a" metalness={0.9} roughness={0.2} />
+            </mesh>
+            <mesh position={[0, -0.2, 0]}>
+              <sphereGeometry args={[0.25, 32, 32]} />
+              <meshStandardMaterial color="#00ffcc" emissive="#00ffcc" emissiveIntensity={dropLOS ? 0.2 : 4.0} roughness={0.1} />
+            </mesh>
+            <mesh position={[0, -0.2, 0]} scale={[1.4, 1.4, 1.4]}>
+              <sphereGeometry args={[0.25, 16, 16]} />
+              <meshBasicMaterial color={dropLOS ? "#f59e0b" : "#38bdf8"} transparent opacity={0.4} wireframe />
+            </mesh>
+
+            {!dropLOS && <pointLight color="#00ffcc" intensity={12} distance={40} decay={1} />}
+          </group>
+        </group>
       </group>
 
       {trailPath.length > 2 && (
@@ -147,31 +207,167 @@ function OpticalLaserBeam({ isLocked, beaconPos }) {
 }
 
 /**
- * Ground Station Optical Terminal Mount
+ * High-Detail Kinematic Ground Station Observatory Telescope Complex
+ * Features: Dynamic Real-Time Pan (Azimuth) & Tilt (Elevation) Tracking Motion,
+ * Carbon-Fiber Optics, Glowing Aperture Rings, Industrial Yoke Servos
  */
-function GroundStationTerminal() {
+function KinematicGroundStationObservatory({ pan = 0, tilt = 0 }) {
+  const panMountRef = useRef();
+  const tiltMountRef = useRef();
+
+  useFrame(() => {
+    // Kinematic Tracking Rotation: Pan (Y-axis Azimuth) and Tilt (X-axis Elevation)
+    if (panMountRef.current) {
+      panMountRef.current.rotation.y = THREE.MathUtils.lerp(
+        panMountRef.current.rotation.y,
+        (-pan * Math.PI) / 180,
+        0.35
+      );
+    }
+    if (tiltMountRef.current) {
+      tiltMountRef.current.rotation.x = THREE.MathUtils.lerp(
+        tiltMountRef.current.rotation.x,
+        (-tilt * Math.PI) / 180,
+        0.35
+      );
+    }
+  });
+
   return (
     <group position={[0, -4, 0]}>
-      <mesh position={[0, -0.5, 0]}>
-        <cylinderGeometry args={[2.0, 2.5, 1.0, 16]} />
-        <meshStandardMaterial color="#0f172a" metalness={0.8} roughness={0.3} />
+      {/* 1. Reinforced Heavy Foundation Base */}
+      <mesh position={[0, -0.6, 0]}>
+        <cylinderGeometry args={[3.2, 3.8, 1.2, 8]} />
+        <meshStandardMaterial color="#0f172a" metalness={0.8} roughness={0.4} />
       </mesh>
 
-      <mesh position={[0, 0.5, 0]}>
-        <boxGeometry args={[1.2, 1.2, 1.2]} />
-        <meshStandardMaterial color="#334155" metalness={0.9} roughness={0.2} />
+      {/* Perimeter Status Warning LED Markers */}
+      {[0, 45, 90, 135, 180, 225, 270, 315].map((angle, idx) => {
+        const rad = (angle * Math.PI) / 180;
+        const x = Math.cos(rad) * 3.3;
+        const z = Math.sin(rad) * 3.3;
+        return (
+          <mesh key={idx} position={[x, 0.0, z]}>
+            <cylinderGeometry args={[0.08, 0.08, 0.2, 8]} />
+            <meshStandardMaterial color="#00f3ff" emissive="#00f3ff" emissiveIntensity={3.0} />
+          </mesh>
+        );
+      })}
+
+      {/* Base Ring Plate */}
+      <mesh position={[0, 0.2, 0]}>
+        <cylinderGeometry args={[2.0, 2.4, 0.4, 16]} />
+        <meshStandardMaterial color="#1e293b" metalness={0.9} roughness={0.2} />
       </mesh>
 
-      <mesh position={[0, 1.2, 0]} rotation={[Math.PI / 4, 0, 0]}>
-        <cylinderGeometry args={[0.4, 0.5, 1.6, 24]} />
-        <meshStandardMaterial color="#0284c7" emissive="#0284c7" emissiveIntensity={0.2} />
-      </mesh>
+      {/* 2. Kinematic Pan Mount Node (Y-Axis Azimuth Motorized Rotation) */}
+      <group ref={panMountRef} position={[0, 0.4, 0]}>
+        {/* Azimuth Turret Ring */}
+        <mesh position={[0, 0.2, 0]}>
+          <cylinderGeometry args={[1.5, 1.7, 0.6, 24]} />
+          <meshStandardMaterial color="#334155" metalness={0.9} roughness={0.2} />
+        </mesh>
+
+        {/* Dual Vertical Yoke Fork Arms */}
+        <mesh position={[-0.9, 0.8, 0]}>
+          <boxGeometry args={[0.3, 1.2, 0.8]} />
+          <meshStandardMaterial color="#1e293b" metalness={0.9} roughness={0.3} />
+        </mesh>
+        <mesh position={[0.9, 0.8, 0]}>
+          <boxGeometry args={[0.3, 1.2, 0.8]} />
+          <meshStandardMaterial color="#1e293b" metalness={0.9} roughness={0.3} />
+        </mesh>
+
+        {/* Azimuth Servo Motors */}
+        <mesh position={[-1.1, 0.8, 0]} rotation={[0, 0, Math.PI / 2]}>
+          <cylinderGeometry args={[0.25, 0.25, 0.3, 16]} />
+          <meshStandardMaterial color="#00f3ff" emissive="#00f3ff" emissiveIntensity={1.5} />
+        </mesh>
+        <mesh position={[1.1, 0.8, 0]} rotation={[0, 0, Math.PI / 2]}>
+          <cylinderGeometry args={[0.25, 0.25, 0.3, 16]} />
+          <meshStandardMaterial color="#00f3ff" emissive="#00f3ff" emissiveIntensity={1.5} />
+        </mesh>
+
+        {/* 3. Kinematic Tilt Mount Node (X-Axis Elevation Motorized Rotation) */}
+        <group ref={tiltMountRef} position={[0, 1.0, 0]}>
+          {/* Main Carbon-Fiber Telescope Barrel */}
+          <group position={[0, 0, -0.6]} rotation={[Math.PI / 2, 0, 0]}>
+            <mesh>
+              <cylinderGeometry args={[0.55, 0.65, 2.2, 32]} />
+              <meshStandardMaterial color="#0f172a" metalness={0.9} roughness={0.15} />
+            </mesh>
+
+            {/* Anodized Cyan Metallic Accent Rings */}
+            <mesh position={[0, 0.7, 0]}>
+              <torusGeometry args={[0.66, 0.04, 16, 32]} />
+              <meshStandardMaterial color="#00f3ff" emissive="#00f3ff" emissiveIntensity={2.5} />
+            </mesh>
+            <mesh position={[0, -0.7, 0]}>
+              <torusGeometry args={[0.66, 0.04, 16, 32]} />
+              <meshStandardMaterial color="#00f3ff" emissive="#00f3ff" emissiveIntensity={2.5} />
+            </mesh>
+
+            {/* Heat Sink Cooling Radiator Fins */}
+            {[...Array(6)].map((_, i) => (
+              <mesh key={i} position={[0, -0.3 + i * 0.12, 0]}>
+                <torusGeometry args={[0.62, 0.02, 12, 24]} />
+                <meshStandardMaterial color="#475569" metalness={0.9} />
+              </mesh>
+            ))}
+
+            {/* Front Aperture Optics & Anti-Reflective Coated Lens */}
+            <group position={[0, 1.12, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+              {/* Outer Lens Shroud Frame */}
+              <mesh>
+                <cylinderGeometry args={[0.62, 0.62, 0.15, 32]} />
+                <meshStandardMaterial color="#1e293b" metalness={0.9} roughness={0.1} />
+              </mesh>
+              {/* Glowing Emerald-Cyan Optical Element */}
+              <mesh position={[0, 0, 0.08]}>
+                <circleGeometry args={[0.55, 32]} />
+                <meshStandardMaterial
+                  color="#00ffcc"
+                  emissive="#00ffcc"
+                  emissiveIntensity={3.5}
+                  roughness={0.1}
+                  transparent
+                  opacity={0.9}
+                />
+              </mesh>
+            </group>
+
+            {/* Secondary Parallel Laser Diode Transceiver Guide Tube */}
+            <mesh position={[0.48, 0.2, 0]}>
+              <cylinderGeometry args={[0.14, 0.14, 2.0, 16]} />
+              <meshStandardMaterial color="#0284c7" emissive="#0284c7" emissiveIntensity={0.5} />
+            </mesh>
+          </group>
+
+          {/* Elevation Counterweight Balance Bars */}
+          <mesh position={[0, -0.4, 0.8]}>
+            <boxGeometry args={[0.8, 0.3, 0.5]} />
+            <meshStandardMaterial color="#334155" metalness={0.9} />
+          </mesh>
+        </group>
+      </group>
+
+      {/* Meteorological Sensor Mast */}
+      <group position={[-2.4, 0.4, 2.0]}>
+        <mesh position={[0, 0.8, 0]}>
+          <cylinderGeometry args={[0.08, 0.12, 2.4, 8]} />
+          <meshStandardMaterial color="#64748b" metalness={0.9} />
+        </mesh>
+        <mesh position={[0, 2.0, 0]}>
+          <sphereGeometry args={[0.18, 16, 16]} />
+          <meshStandardMaterial color="#38bdf8" emissive="#38bdf8" emissiveIntensity={1.5} />
+        </mesh>
+      </group>
     </group>
   );
 }
 
 /**
- * Simulated Atmospheric Turbulence Fog Mesh
+ * Atmospheric Turbulence Fog Mesh
  */
 function EnvironmentalDisturbances({ turbulenceIntensity = 0, dropLOS = false }) {
   const fogRef = useRef();
@@ -219,7 +415,6 @@ function BoresightGimbalRig({
     const t = clock.getElapsedTime();
     const { jx, jy } = getPlatformJitter(t, jitterAmp, jitterFreq);
 
-    // Tight 0.35 lerp interpolation preventing phase lag overshooting
     if (panRef.current) {
       panRef.current.rotation.y = THREE.MathUtils.lerp(
         panRef.current.rotation.y,
@@ -296,22 +491,24 @@ export default function DualViewportScene({
       {/* VIEWPORT A: Global Tactical 3D Observer */}
       <div className="col-span-7 relative rounded-xl overflow-hidden border border-slate-800 bg-slate-950">
         <div className="absolute top-3 left-3 z-10 glass-panel px-3 py-1.5 rounded-lg flex items-center space-x-2 border border-slate-700">
-          <Eye className="w-4 h-4 text-cyan-400" />
+          <Radio className="w-4 h-4 text-cyan-400 animate-pulse" />
           <span className="text-xs font-mono font-bold text-slate-200">
-            VIEWPORT A: GLOBAL TACTICAL OBSERVER
+            VIEWPORT A: KINEMATIC GROUND OBSERVATORY & ORBITAL SATELLITE
           </span>
         </div>
 
         <Canvas gl={{ antialias: true }}>
-          <ambientLight intensity={0.3} />
-          <directionalLight position={[15, 25, 20]} intensity={1.5} color="#ffffff" />
+          <ambientLight intensity={0.4} />
+          <directionalLight position={[15, 25, 20]} intensity={1.8} color="#ffffff" />
           <Stars radius={120} depth={50} count={6000} factor={4} saturation={0} fade speed={1} />
           <OrbitControls makeDefault enablePan={true} maxPolarAngle={Math.PI / 2 + 0.1} />
 
           <PerspectiveCamera makeDefault fov={50} position={[22, 16, 25]} />
-          <GroundStationTerminal />
+          
+          {/* Kinematic Ground Station Telescope with Real-Time Pan/Tilt Tracking */}
+          <KinematicGroundStationObservatory pan={pan} tilt={tilt} />
 
-          <AirborneTarget
+          <OrbitalSatelliteTarget
             trajectoryPreset={trajectoryPreset}
             beaconRef={beaconRef}
             onPosUpdate={(pos) => setBeaconPos(pos)}
@@ -348,8 +545,8 @@ export default function DualViewportScene({
             if (onCanvasReady) onCanvasReady(gl.domElement);
           }}
         >
-          <ambientLight intensity={0.2} />
-          <directionalLight position={[10, 20, 15]} intensity={1} color="#ffffff" />
+          <ambientLight intensity={0.3} />
+          <directionalLight position={[10, 20, 15]} intensity={1.2} color="#ffffff" />
           <Stars radius={100} depth={50} count={4000} factor={3} fade />
 
           <BoresightGimbalRig
@@ -363,7 +560,7 @@ export default function DualViewportScene({
             onPixelErrorUpdate={onPixelErrorUpdate}
           />
 
-          <AirborneTarget trajectoryPreset={trajectoryPreset} beaconRef={beaconRef} dropLOS={dropLOS} />
+          <OrbitalSatelliteTarget trajectoryPreset={trajectoryPreset} beaconRef={beaconRef} dropLOS={dropLOS} />
           <EnvironmentalDisturbances turbulenceIntensity={turbulenceIntensity} dropLOS={dropLOS} />
         </Canvas>
 
