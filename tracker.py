@@ -245,9 +245,9 @@ class AutonomousTrackingFSM:
         }
 
 
-def extract_centroid_and_binary_preview(frame_b64, width=640, height=480):
+def extract_centroid_and_binary_preview(frame_b64, threshold_val=180, blur_kernel=5, morph_iter=2, width=640, height=480):
     if not HAS_OPENCV or not frame_b64:
-        return None, None
+        return None, None, None
 
     try:
         img_bytes = base64.b64decode(frame_b64)
@@ -255,14 +255,28 @@ def extract_centroid_and_binary_preview(frame_b64, width=640, height=480):
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
         if frame is None:
-            return None, None
+            return None, None, None
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        _, thresh = cv2.threshold(blurred, 215, 255, cv2.THRESH_BINARY)
+        
+        # Ensure blur kernel is odd
+        k_size = int(blur_kernel)
+        if k_size % 2 == 0:
+            k_size += 1
+        k_size = max(1, k_size)
+
+        blurred = cv2.GaussianBlur(gray, (k_size, k_size), 0)
+        thresh_val = int(np.clip(threshold_val, 10, 255))
+        _, thresh = cv2.threshold(blurred, thresh_val, 255, cv2.THRESH_BINARY)
+
+        # Apply morphological operations
+        if morph_iter > 0:
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+            thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=int(morph_iter))
 
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         centroid = None
+        bbox = None
 
         if contours:
             c = max(contours, key=cv2.contourArea)
@@ -271,13 +285,15 @@ def extract_centroid_and_binary_preview(frame_b64, width=640, height=480):
                 cx = int(M["m10"] / M["m00"])
                 cy = int(M["m01"] / M["m00"])
                 centroid = (cx, cy)
+                x, y, w, h = cv2.boundingRect(c)
+                bbox = [int(x), int(y), int(w), int(h)]
 
         _, buffer = cv2.imencode('.jpg', thresh)
         binary_b64 = base64.b64encode(buffer).decode('utf-8')
 
-        return centroid, binary_b64
+        return centroid, binary_b64, bbox
     except Exception:
-        return None, None
+        return None, None, None
 
 
 def main():
@@ -300,17 +316,26 @@ def main():
             input_err_x = data.get("error_x", None)
             input_err_y = data.get("error_y", None)
             drop_los = data.get("drop_los", False)
+            threshold_val = data.get("binary_threshold", 180)
+            blur_kernel = data.get("blur_kernel", 5)
+            morph_iter = data.get("morph_iter", 2)
 
             if "gains" in data:
                 fsm.pid.set_gains(data["gains"])
 
-            centroid, binary_b64 = extract_centroid_and_binary_preview(frame_b64)
+            centroid, binary_b64, bbox = extract_centroid_and_binary_preview(
+                frame_b64,
+                threshold_val=threshold_val,
+                blur_kernel=blur_kernel,
+                morph_iter=morph_iter
+            )
             res = fsm.update(centroid, input_err_x, input_err_y, drop_los=drop_los, dt=dt)
             cv_latency = (time.time() - start_cv) * 1000.0
 
             res["fps"] = round(1.0 / dt, 1) if dt > 0 else 60.0
             res["cv_latency_ms"] = round(cv_latency, 2)
             res["binary_frame_b64"] = binary_b64
+            res["bbox"] = bbox
 
             print(json.dumps(res), flush=True)
 

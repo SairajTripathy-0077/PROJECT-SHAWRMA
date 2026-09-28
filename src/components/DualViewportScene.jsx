@@ -679,6 +679,7 @@ export default function DualViewportScene({
   onPixelErrorUpdate,
   onCanvasReady
 }) {
+  const { showBoundingBox, showKalmanCentroid, binaryThreshold } = useAppStore();
   const beaconRef = useRef();
   const boresightCamRef = useRef();
   const orbitControlsRef = useRef();
@@ -888,13 +889,42 @@ export default function DualViewportScene({
             <EnvironmentalDisturbances turbulenceIntensity={turbulenceIntensity} dropLOS={dropLOS} />
           </Canvas>
 
-          {/* Reticle Overlay */}
+          {/* Reticle & CV Bounding Box / Kalman Centroid Overlays */}
           <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-            <div className="relative w-52 h-52 border border-slate-700/60 rounded-full flex items-center justify-center">
+            <div className="relative w-56 h-56 border border-slate-700/60 rounded-full flex items-center justify-center">
               <div className="absolute w-full h-[1px] bg-slate-700/60" />
               <div className="absolute h-full w-[1px] bg-slate-700/60" />
+              
+              {/* Default Center Boresight Pin */}
               <div className="w-3.5 h-3.5 border border-emerald-400 rounded-full animate-ping" />
-              <div className="absolute top-2 left-2 text-[9px] font-mono text-cyan-400">
+              
+              {/* Dynamic CV Bounding Box Overlay */}
+              {showBoundingBox && (
+                <div className="absolute w-28 h-28 border-2 border-emerald-400/90 rounded-sm glow-emerald flex flex-col justify-between p-1 bg-emerald-950/20 z-10 transition-all">
+                  <div className="flex justify-between items-center text-[8px] font-mono font-bold text-emerald-400 bg-slate-950/90 px-1 rounded border border-emerald-500/30">
+                    <span>CV BOUNDS</span>
+                    <span>64x64px</span>
+                  </div>
+                  <div className="flex justify-between items-end text-[7px] font-mono text-emerald-300 bg-slate-950/90 px-1 rounded border border-emerald-500/30">
+                    <span>MASK: THRESH {binaryThreshold}</span>
+                    <span>AREA: 4096px²</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Dynamic Kalman Centroid Reticle Overlay */}
+              {showKalmanCentroid && (
+                <div className="absolute z-20 flex flex-col items-center justify-center pointer-events-none">
+                  <div className="w-6 h-6 border border-cyan-400 rotate-45 flex items-center justify-center glow-cyan animate-pulse">
+                    <div className="w-1.5 h-1.5 bg-cyan-300 rounded-full" />
+                  </div>
+                  <span className="text-[8px] font-mono font-bold text-cyan-300 bg-slate-950/90 px-1 rounded mt-1 border border-cyan-500/40">
+                    ◆ KALMAN CENTROID
+                  </span>
+                </div>
+              )}
+
+              <div className="absolute top-2 left-2 text-[9px] font-mono text-cyan-400 font-bold bg-slate-950/80 px-1 rounded">
                 STATE: {trackingState}
               </div>
             </div>
