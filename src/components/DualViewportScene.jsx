@@ -364,7 +364,7 @@ function OpticalLaserBeam({ isLocked, beaconPos }) {
 /**
  * High-Detail Kinematic Ground Station Observatory Telescope Complex
  */
-function KinematicGroundStationObservatory({ pan = 0, tilt = 0 }) {
+function KinematicGroundStationObservatory({ pan = 0, tilt = 0, zoomFov = 45 }) {
   const panMountRef = useRef();
   const tiltMountRef = useRef();
 
@@ -471,6 +471,11 @@ function KinematicGroundStationObservatory({ pan = 0, tilt = 0 }) {
               </mesh>
             </group>
 
+            {/* 3D Optical Frustum Projection from Telescope Barrel */}
+            <group position={[0, 1.12, 0]} rotation={[Math.PI, 0, 0]}>
+              <CameraFrustumPyramid fov={zoomFov} far={15} />
+            </group>
+
             <mesh position={[0.48, 0.2, 0]}>
               <cylinderGeometry args={[0.14, 0.14, 2.0, 16]} />
               <meshStandardMaterial color="#0284c7" emissive="#0284c7" emissiveIntensity={0.5} />
@@ -542,6 +547,14 @@ function BoresightGimbalRig({
 }) {
   const panRef = useRef();
   const tiltRef = useRef();
+
+  // Instant Three.js Projection Matrix Update on Optical FOV Zoom Change
+  React.useEffect(() => {
+    if (boresightCamRef && boresightCamRef.current) {
+      boresightCamRef.current.fov = zoomFov;
+      boresightCamRef.current.updateProjectionMatrix();
+    }
+  }, [zoomFov, boresightCamRef]);
 
   useFrame(({ clock }) => {
     const t = clock.getElapsedTime();
@@ -664,10 +677,53 @@ function CustomViewFocusDropdown({ focusTarget, setFocusTarget }) {
   );
 }
 
+export const SENSOR_MODES = {
+  0: {
+    id: 0,
+    name: 'VIS RGB',
+    band: '400-700nm Optical',
+    desc: 'Visible spectrum broadband color sensor',
+    filter: 'none',
+    tint: '#00f3ff',
+    reticleBorder: 'border-emerald-400',
+    reticleColor: 'text-emerald-400',
+    pingColor: 'bg-emerald-400',
+    crosshairColor: 'bg-emerald-600/40',
+    badgeColor: 'border-emerald-500/40 text-emerald-300 bg-emerald-950/80',
+  },
+  1: {
+    id: 1,
+    name: 'SWIR THERMAL',
+    band: '1550nm InGaAs',
+    desc: 'Short-Wave Infrared for cloud penetration & laser beacon tracking',
+    filter: 'sepia(0.85) hue-rotate(320deg) saturate(3.5) contrast(1.45)',
+    tint: '#f59e0b',
+    reticleBorder: 'border-amber-400',
+    reticleColor: 'text-amber-400',
+    pingColor: 'bg-amber-400',
+    crosshairColor: 'bg-amber-600/40',
+    badgeColor: 'border-amber-500/40 text-amber-300 bg-amber-950/80',
+  },
+  2: {
+    id: 2,
+    name: 'WHITE-HOT',
+    band: '3-5µm MWIR FLIR',
+    desc: 'Mid-Wave Infrared high-contrast thermal radiance',
+    filter: 'grayscale(1) invert(0.9) contrast(2.4) brightness(1.2)',
+    tint: '#06b6d4',
+    reticleBorder: 'border-cyan-300',
+    reticleColor: 'text-cyan-300',
+    pingColor: 'bg-cyan-300',
+    crosshairColor: 'bg-cyan-600/40',
+    badgeColor: 'border-cyan-500/40 text-cyan-300 bg-cyan-950/80',
+  },
+};
+
 export default function DualViewportScene({
   pan = 0,
   tilt = 0,
   zoomFov = 45,
+  sensorMode = 0,
   jitterAmp = 0.05,
   jitterFreq = 25.0,
   turbulenceIntensity = 0,
@@ -689,6 +745,12 @@ export default function DualViewportScene({
   const [fullscreenMode, setFullscreenMode] = useState('SPLIT'); // 'SPLIT', 'VIEWPORT_A', 'VIEWPORT_B'
   const [isFullscreenApp, setIsFullscreenApp] = useState(false);
   const isDualSatMode = useAppStore((s) => s.isDualSatMode);
+  const storeSensorMode = useAppStore((s) => s.sensorMode);
+  const storeZoomFov = useAppStore((s) => s.zoomFov);
+
+  const effectiveSensorMode = sensorMode !== undefined ? sensorMode : storeSensorMode;
+  const effectiveZoomFov = zoomFov !== undefined ? zoomFov : storeZoomFov;
+  const activeSensor = SENSOR_MODES[effectiveSensorMode] || SENSOR_MODES[0];
 
   const toggleAppFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -814,7 +876,7 @@ export default function DualViewportScene({
               orbitControlsRef={orbitControlsRef}
             />
 
-            <KinematicGroundStationObservatory pan={pan} tilt={tilt} />
+            <KinematicGroundStationObservatory pan={pan} tilt={tilt} zoomFov={effectiveZoomFov} />
 
             <OrbitalSatelliteTarget
               trajectoryPreset={trajectoryPreset}
@@ -842,8 +904,6 @@ export default function DualViewportScene({
 
             <gridHelper args={[100, 100, '#1e293b', '#0f172a']} position={[0, -4.5, 0]} />
           </Canvas>
-
-
         </div>
 
         {/* VIEWPORT B: Gimbal Sensor Boresight Feed */}
@@ -856,10 +916,11 @@ export default function DualViewportScene({
               : 'col-span-5'
           }`}
         >
-          <div className="absolute top-3 left-3 z-10 bg-slate-950/90 px-2.5 py-1 rounded border border-slate-700 flex items-center space-x-1.5">
-            <Zap className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
-            <span className="text-[10px] font-mono font-bold text-slate-200">
-              BORESIGHT (FOV {zoomFov}°)
+          {/* Top-Left Boresight & Active Sensor Indicator Badge */}
+          <div className={`absolute top-3 left-3 z-10 px-2.5 py-1 rounded border flex items-center space-x-1.5 backdrop-blur-md transition-all duration-300 ${activeSensor.badgeColor}`}>
+            <Zap className="w-3.5 h-3.5 animate-pulse" />
+            <span className="text-[10px] font-mono font-bold">
+              BORESIGHT - {activeSensor.name} ({activeSensor.band}) [FOV {effectiveZoomFov}°]
             </span>
           </div>
 
@@ -891,48 +952,54 @@ export default function DualViewportScene({
             </button>
           </div>
 
-          <Canvas
-            gl={{ preserveDrawingBuffer: true, antialias: true }}
-            onCreated={({ gl }) => {
-              if (onCanvasReady) onCanvasReady(gl.domElement);
-            }}
-          >
-            <ambientLight intensity={0.3} />
-            <directionalLight position={[10, 20, 15]} intensity={1.2} color="#ffffff" />
-            <Stars radius={100} depth={50} count={4000} factor={3} fade />
+          {/* Container with dynamic Multi-Spectral CSS Filter for authentic spectral simulation */}
+          <div className="w-full h-full" style={{ filter: activeSensor.filter, transition: 'filter 0.35s ease' }}>
+            <Canvas
+              gl={{ preserveDrawingBuffer: true, antialias: true }}
+              onCreated={({ gl }) => {
+                if (onCanvasReady) onCanvasReady(gl.domElement);
+              }}
+            >
+              <ambientLight intensity={0.3} />
+              <directionalLight position={[10, 20, 15]} intensity={1.2} color="#ffffff" />
+              <Stars radius={100} depth={50} count={4000} factor={3} fade />
 
-            <BoresightGimbalRig
-              pan={pan}
-              tilt={tilt}
-              jitterAmp={jitterAmp}
-              jitterFreq={jitterFreq}
-              boresightCamRef={boresightCamRef}
-              beaconRef={beaconRef}
-              zoomFov={zoomFov}
-              onPixelErrorUpdate={onPixelErrorUpdate}
-            />
-
-            <OrbitalSatelliteTarget trajectoryPreset={trajectoryPreset} beaconRef={beaconRef} dropLOS={dropLOS} showTrail={showPIP} targetVelocity={targetVelocity} />
-            {isDualSatMode && (
-              <OrbitalSatelliteTarget
-                trajectoryPreset={trajectoryPreset === 'SINUSOIDAL' ? 'FIGURE_8' : trajectoryPreset}
-                phaseOffset={Math.PI * 0.8}
-                dropLOS={dropLOS}
-                showTrail={showPIP}
-                targetVelocity={targetVelocity}
+              <BoresightGimbalRig
+                pan={pan}
+                tilt={tilt}
+                jitterAmp={jitterAmp}
+                jitterFreq={jitterFreq}
+                boresightCamRef={boresightCamRef}
+                beaconRef={beaconRef}
+                zoomFov={effectiveZoomFov}
+                onPixelErrorUpdate={onPixelErrorUpdate}
               />
-            )}
-            <EnvironmentalDisturbances turbulenceIntensity={turbulenceIntensity} dropLOS={dropLOS} />
-          </Canvas>
 
-          {/* Reticle Overlay */}
+              <OrbitalSatelliteTarget trajectoryPreset={trajectoryPreset} beaconRef={beaconRef} dropLOS={dropLOS} showTrail={showPIP} targetVelocity={targetVelocity} />
+              {isDualSatMode && (
+                <OrbitalSatelliteTarget
+                  trajectoryPreset={trajectoryPreset === 'SINUSOIDAL' ? 'FIGURE_8' : trajectoryPreset}
+                  phaseOffset={Math.PI * 0.8}
+                  dropLOS={dropLOS}
+                  showTrail={showPIP}
+                  targetVelocity={targetVelocity}
+                />
+              )}
+              <EnvironmentalDisturbances turbulenceIntensity={turbulenceIntensity} dropLOS={dropLOS} />
+            </Canvas>
+          </div>
+
+          {/* Reticle Overlay matching active Multi-Spectral sensor theme */}
           <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-            <div className="relative w-52 h-52 border border-slate-700/60 rounded-full flex items-center justify-center">
-              <div className="absolute w-full h-[1px] bg-slate-700/60" />
-              <div className="absolute h-full w-[1px] bg-slate-700/60" />
-              <div className="w-3.5 h-3.5 border border-emerald-400 rounded-full animate-ping" />
-              <div className="absolute top-2 left-2 text-[9px] font-mono text-cyan-400">
+            <div className={`relative w-52 h-52 border rounded-full flex items-center justify-center transition-colors duration-300 ${activeSensor.reticleBorder}`}>
+              <div className={`absolute w-full h-[1px] ${activeSensor.crosshairColor}`} />
+              <div className={`absolute h-full w-[1px] ${activeSensor.crosshairColor}`} />
+              <div className={`w-3.5 h-3.5 border rounded-full animate-ping ${activeSensor.reticleBorder}`} />
+              <div className={`absolute top-2 left-2 text-[9px] font-mono ${activeSensor.reticleColor}`}>
                 STATE: {trackingState} {isDualSatMode ? '(2-SAT VSP)' : ''}
+              </div>
+              <div className="absolute bottom-2 right-2 text-[8px] font-mono text-slate-400 bg-slate-950/80 px-1.5 py-0.5 rounded border border-slate-800">
+                IFOV: {((effectiveZoomFov * Math.PI / 180 / 640) * 1e6).toFixed(1)} µrad/px
               </div>
             </div>
           </div>

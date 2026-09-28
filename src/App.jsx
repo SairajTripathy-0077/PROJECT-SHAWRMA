@@ -16,6 +16,7 @@ export default function App() {
     trajectoryPreset, 
     zoomFov, 
     sensorMode, 
+    gimbalMaxVel,
     jitterAmp, 
     jitterFreq, 
     turbulence, 
@@ -65,10 +66,14 @@ export default function App() {
       const tVel = tilt_vel !== undefined ? tilt_vel : tilt_velocity;
       const [errX, errY] = error_px || [0, 0];
 
-      // Smooth step integration without over-gain multiplier
+      // Smooth step integration with dynamic Max Velocity Slew Rate Clamping
       if (isTrackingActive && !isPaused) {
-        setPan((prev) => prev + pVel * 1.0);
-        setTilt((prev) => prev + tVel * 1.0);
+        const dt = 0.033;
+        const maxDeltaDeg = (gimbalMaxVel || 120.0) * dt;
+        const clampedPVel = Math.max(-maxDeltaDeg, Math.min(maxDeltaDeg, pVel));
+        const clampedTVel = Math.max(-maxDeltaDeg, Math.min(maxDeltaDeg, tVel));
+        setPan((prev) => prev + clampedPVel);
+        setTilt((prev) => prev + clampedTVel);
       }
 
       setTrackingState(state);
@@ -110,18 +115,18 @@ export default function App() {
     return () => {
       videoBridge.disconnect();
     };
-  }, [isTrackingActive, isPaused, pan, tilt, setTrackingState]);
+  }, [isTrackingActive, isPaused, pan, tilt, gimbalMaxVel, setTrackingState]);
 
   // Main 30 FPS Frame Transmission Loop
   useEffect(() => {
     const frameInterval = setInterval(() => {
       if (canvasRef.current && !isPaused) {
-        videoBridge.sendFrame(canvasRef.current, pixelErrorRef.current, dropLOS, pidGains);
+        videoBridge.sendFrame(canvasRef.current, pixelErrorRef.current, dropLOS, { ...pidGains, max_vel: gimbalMaxVel });
       }
     }, 33);
 
     return () => clearInterval(frameInterval);
-  }, [dropLOS, pidGains, isPaused]);
+  }, [dropLOS, pidGains, gimbalMaxVel, isPaused]);
 
   const handlePixelErrorUpdate = (errObj) => {
     pixelErrorRef.current = { x: errObj.x, y: errObj.y };
@@ -169,6 +174,7 @@ export default function App() {
             pan={pan}
             tilt={tilt}
             zoomFov={zoomFov}
+            sensorMode={sensorMode}
             jitterAmp={jitterAmp}
             jitterFreq={jitterFreq}
             turbulenceIntensity={turbulence}
