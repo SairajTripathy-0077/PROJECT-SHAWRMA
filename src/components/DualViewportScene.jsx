@@ -584,9 +584,15 @@ function BoresightGimbalRig({
       );
     }
 
-    if (beaconRef.current && boresightCamRef.current && onPixelErrorUpdate) {
-      const beaconPos = beaconRef.current.position.clone();
-      const proj = beaconPos.project(boresightCamRef.current);
+    if (beaconRef && beaconRef.current && boresightCamRef && boresightCamRef.current && onPixelErrorUpdate) {
+      // Force update world matrices for accurate projection
+      boresightCamRef.current.updateMatrixWorld(true);
+      beaconRef.current.updateMatrixWorld(true);
+
+      const beaconWorldPos = new THREE.Vector3();
+      beaconRef.current.getWorldPosition(beaconWorldPos);
+
+      const proj = beaconWorldPos.project(boresightCamRef.current);
 
       const targetWidth = 640;
       const targetHeight = 480;
@@ -755,7 +761,7 @@ export default function DualViewportScene({
               : 'col-span-7'
           }`}
         >
-          {/* Top-Left Locked Badge Pill & Drag Hint */}
+          {/* Top-Left Locked Badge Pill */}
           <div className="absolute top-3 left-3 z-20 flex items-center space-x-2">
             <div className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold flex items-center space-x-1.5 border ${
               isLocked
@@ -764,11 +770,6 @@ export default function DualViewportScene({
             }`}>
               <span className={`w-1.5 h-1.5 rounded-sm ${isLocked ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
               <span>{isLocked ? 'LOCKED' : 'SEARCHING'}</span>
-            </div>
-
-            <div className="px-2 py-1 rounded text-[9px] font-mono font-bold flex items-center space-x-1 border bg-slate-950/80 text-cyan-300 border-slate-700/80">
-              <Move className="w-3 h-3 text-amber-400" />
-              <span>DRAG TARGET IN VIEWPORT</span>
             </div>
           </div>
 
@@ -851,13 +852,6 @@ export default function DualViewportScene({
               : 'col-span-5'
           }`}
         >
-          <div className="absolute top-3 left-3 z-10 bg-slate-950/90 px-2.5 py-1 rounded border border-slate-700 flex items-center space-x-1.5">
-            <Zap className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
-            <span className="text-[10px] font-mono font-bold text-slate-200">
-              BORESIGHT (FOV {zoomFov}°)
-            </span>
-          </div>
-
           {/* Viewport B Top Controls: PIP & Maximize */}
           <div
             className="absolute top-3 right-3 z-50 flex items-center space-x-1.5 pointer-events-auto"
@@ -911,7 +905,7 @@ export default function DualViewportScene({
             <EnvironmentalDisturbances turbulenceIntensity={turbulenceIntensity} dropLOS={dropLOS} />
           </Canvas>
 
-          {/* Reticle & CV Bounding Box / Kalman Centroid Overlays */}
+          {/* Reticle Overlay */}
           <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
             <div className="relative w-56 h-56 border border-slate-700/60 rounded-full flex items-center justify-center">
               <div className="absolute w-full h-[1px] bg-slate-700/60" />
@@ -919,32 +913,6 @@ export default function DualViewportScene({
               
               {/* Default Center Boresight Pin */}
               <div className="w-3.5 h-3.5 border border-emerald-400 rounded-full animate-ping" />
-              
-              {/* Dynamic CV Bounding Box Overlay */}
-              {showBoundingBox && (
-                <div className="absolute w-28 h-28 border-2 border-emerald-400/90 rounded-sm glow-emerald flex flex-col justify-between p-1 bg-emerald-950/20 z-10 transition-all">
-                  <div className="flex justify-between items-center text-[8px] font-mono font-bold text-emerald-400 bg-slate-950/90 px-1 rounded border border-emerald-500/30">
-                    <span>CV BOUNDS</span>
-                    <span>64x64px</span>
-                  </div>
-                  <div className="flex justify-between items-end text-[7px] font-mono text-emerald-300 bg-slate-950/90 px-1 rounded border border-emerald-500/30">
-                    <span>MASK: THRESH {binaryThreshold}</span>
-                    <span>AREA: 4096px²</span>
-                  </div>
-                </div>
-              )}
-
-              {/* Dynamic Kalman Centroid Reticle Overlay */}
-              {showKalmanCentroid && (
-                <div className="absolute z-20 flex flex-col items-center justify-center pointer-events-none">
-                  <div className="w-6 h-6 border border-cyan-400 rotate-45 flex items-center justify-center glow-cyan animate-pulse">
-                    <div className="w-1.5 h-1.5 bg-cyan-300 rounded-full" />
-                  </div>
-                  <span className="text-[8px] font-mono font-bold text-cyan-300 bg-slate-950/90 px-1 rounded mt-1 border border-cyan-500/40">
-                    ◆ KALMAN CENTROID
-                  </span>
-                </div>
-              )}
 
               <div className="absolute top-2 left-2 text-[9px] font-mono text-cyan-400 font-bold bg-slate-950/80 px-1 rounded">
                 STATE: {trackingState}

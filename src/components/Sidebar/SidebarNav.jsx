@@ -19,7 +19,6 @@ export default function SidebarNav() {
   const tabs = [
     { id: 'ORBIT & BIOME', label: 'ORBIT & BIOME', icon: Globe },
     { id: 'OPTICAL SENSORS', label: 'OPTICAL SENSORS', icon: Camera },
-    { id: 'CV MATRIX & MASK', label: 'CV MATRIX & MASK', icon: Scan },
     { id: 'KALMAN & PID DECK', label: 'KALMAN & PID DECK', icon: Crosshair },
     { id: 'OPTICAL LINK BUDGET', label: 'OPTICAL LINK BUDGET', icon: BarChart3 },
     { id: 'DISTURBANCE LAB', label: 'DISTURBANCE LAB', icon: Activity },
