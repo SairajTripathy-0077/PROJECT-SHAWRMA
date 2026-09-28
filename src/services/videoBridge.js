@@ -1,7 +1,7 @@
 /**
  * VideoBridge Service for FSOC PAT Virtual Simulator
  * Handles frame extraction from R3F WebGL canvas and manages communication
- * with the Python OpenCV + Kalman Filter + PID Vision Backend via Tauri IPC or WebSocket/Local bridge.
+ * with the Python OpenCV + EKF + PID Vision Backend via Tauri IPC or WebSocket/Local bridge.
  */
 
 class VideoBridge {
@@ -16,11 +16,6 @@ class VideoBridge {
     this.fps = 60;
   }
 
-  /**
-   * Initialize bridge connection (WebSocket fallback or Tauri IPC listener)
-   * @param {string} wsUrl Optional WebSocket URL if running over network/socket
-   * @param {Function} onTelemetry Callback function to receive tracking feedback
-   */
   init(wsUrl = 'ws://localhost:8765', onTelemetry) {
     this.onTelemetryCallback = onTelemetry;
 
@@ -52,13 +47,11 @@ class VideoBridge {
         this.isProcessingFrame = false;
       };
 
-      this.ws.onerror = (err) => {
-        console.warn('[VideoBridge] WebSocket connection error. Falling back to internal PID simulation loop.', err);
+      this.ws.onerror = () => {
         this.isConnected = false;
       };
 
       this.ws.onclose = () => {
-        console.log('[VideoBridge] WebSocket connection closed.');
         this.isConnected = false;
       };
     } catch (e) {
@@ -79,12 +72,7 @@ class VideoBridge {
     }
   }
 
-  /**
-   * Captures WebGL canvas frame and sends to backend
-   * @param {HTMLCanvasElement} canvas R3F WebGL DOM Canvas Element
-   * @param {Object} currentError Optional simulated pixel error if in fallback mode
-   */
-  async sendFrame(canvas, currentError = { x: 0, y: 0 }) {
+  async sendFrame(canvas, currentError = { x: 0, y: 0 }, dropLOS = false, pidGains = null) {
     if (!canvas) return;
 
     const now = performance.now();
@@ -95,7 +83,6 @@ class VideoBridge {
       this.lastFrameTime = now;
     }
 
-    // Prevent frame stacking if backend is still processing
     if (this.isProcessingFrame && this.isConnected) {
       return;
     }
@@ -103,51 +90,69 @@ class VideoBridge {
     this.isProcessingFrame = true;
 
     try {
-      // Compress canvas frame to low-res JPEG base64 buffer (640x480 resolution target)
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.55);
       const base64Data = dataUrl.split(',')[1];
 
       const payload = {
         frame: base64Data,
         error_x: currentError.x,
         error_y: currentError.y,
+        drop_los: dropLOS,
+        gains: pidGains,
         timestamp: now
       };
 
       if (this.isConnected) {
         if (this.isTauriAvailable) {
           const { invoke } = await import('@tauri-apps/api/core');
-          await invoke('process_frame', { payload });
+          const res = await invoke('process_frame', { payload });
+          this.handleBackendResponse(res);
+          this.isProcessingFrame = false;
         } else if (this.ws && this.ws.readyState === WebSocket.OPEN) {
           this.ws.send(JSON.stringify(payload));
         }
       } else {
-        // Fallback calculation if backend script is offline during browser standalone mode
-        this.simulateFallbackTracking(currentError.x, currentError.y);
+        this.simulateFallbackTracking(currentError.x, currentError.y, dropLOS, pidGains);
         this.isProcessingFrame = false;
       }
     } catch (err) {
-      console.error('[VideoBridge] Error encoding/transmitting canvas frame:', err);
       this.isProcessingFrame = false;
     }
   }
 
-  simulateFallbackTracking(errX, errY) {
-    const kP = 0.08;
-    const kD = 0.01;
-    
-    // Calculate angular velocities with proper sign alignment
-    // Negative feedback loop: if target is right (+errX), pan left (-velPan) to re-center
-    const panVel = -errX * kP;
-    const tiltVel = errY * kP;
+  simulateFallbackTracking(errX, errY, dropLOS, pidGains) {
+    if (dropLOS) {
+      this.handleBackendResponse({
+        state: 'PREDICTIVE_HOLD',
+        pan_velocity: 0.0,
+        tilt_velocity: 0.0,
+        error_px: [errX, errY],
+        predicted_px: [errX * 0.9, errY * 0.9],
+        locked: false,
+        fps: this.fps,
+        cv_latency_ms: 3.2,
+        binary_frame_b64: null
+      });
+      return;
+    }
+
+    const kpPan = pidGains ? pidGains.kp_pan : 0.08;
+    const kpTilt = pidGains ? pidGains.kp_tilt : 0.08;
+
+    const panVel = errX * kpPan;
+    const tiltVel = -errY * kpTilt;
     const isLocked = Math.abs(errX) < 15 && Math.abs(errY) < 15;
 
     this.handleBackendResponse({
-      pan_velocity: panVel,
-      tilt_velocity: tiltVel,
+      state: isLocked ? 'TRACKING' : 'ACQUIRE',
+      pan_velocity: Math.max(Math.min(panVel, 20.0), -20.0),
+      tilt_velocity: Math.max(Math.min(tiltVel, 20.0), -20.0),
       error_px: [errX, errY],
+      predicted_px: [errX * 0.95, errY * 0.95],
       locked: isLocked,
-      fps: this.fps
+      fps: this.fps,
+      cv_latency_ms: 3.2,
+      binary_frame_b64: null
     });
   }
 
