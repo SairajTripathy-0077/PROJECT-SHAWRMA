@@ -240,24 +240,17 @@ function OrbitalSatelliteTarget({
         onPointerOver={() => isDraggable && setIsHovered(true)}
         onPointerOut={() => setIsHovered(false)}
       >
-        {/* Interactive Drag Bounding Box Ring when Hovered or Dragged */}
-        {isDraggable && (isHovered || isDragging) && (
-          <mesh>
-            <sphereGeometry args={[2.5, 16, 16]} />
-            <meshBasicMaterial
-              color={isDragging ? "#00ffcc" : "#f59e0b"}
-              wireframe
-              transparent
-              opacity={isDragging ? 0.7 : 0.4}
-            />
-          </mesh>
-        )}
-
         <group ref={satelliteBusRef}>
           {/* Main Bus Body */}
           <mesh position={[0, 0, 0]}>
             <boxGeometry args={[1.2, 1.2, 1.6]} />
-            <meshStandardMaterial color="#f59e0b" metalness={0.9} roughness={0.2} emissive="#b45309" emissiveIntensity={0.2} />
+            <meshStandardMaterial
+              color={isDragging ? "#00ffcc" : isHovered ? "#f59e0b" : "#f59e0b"}
+              metalness={0.9}
+              roughness={0.2}
+              emissive={isDragging ? "#00ffcc" : isHovered ? "#f59e0b" : "#b45309"}
+              emissiveIntensity={isDragging ? 1.5 : isHovered ? 0.9 : 0.2}
+            />
           </mesh>
 
           {/* Instrument Bevel Trim */}
@@ -278,7 +271,12 @@ function OrbitalSatelliteTarget({
             </mesh>
             <mesh scale={[1.02, 1.02, 1.02]}>
               <boxGeometry args={[1.8, 0.04, 2.2]} />
-              <meshBasicMaterial color="#38bdf8" wireframe transparent opacity={0.3} />
+              <meshBasicMaterial
+                color={isDragging ? "#00ffcc" : isHovered ? "#f59e0b" : "#38bdf8"}
+                wireframe
+                transparent
+                opacity={isDragging ? 0.8 : isHovered ? 0.6 : 0.3}
+              />
             </mesh>
           </group>
 
@@ -294,7 +292,12 @@ function OrbitalSatelliteTarget({
             </mesh>
             <mesh scale={[1.02, 1.02, 1.02]}>
               <boxGeometry args={[1.8, 0.04, 2.2]} />
-              <meshBasicMaterial color="#38bdf8" wireframe transparent opacity={0.3} />
+              <meshBasicMaterial
+                color={isDragging ? "#00ffcc" : isHovered ? "#f59e0b" : "#38bdf8"}
+                wireframe
+                transparent
+                opacity={isDragging ? 0.8 : isHovered ? 0.6 : 0.3}
+              />
             </mesh>
           </group>
 
