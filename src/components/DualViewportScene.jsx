@@ -101,17 +101,26 @@ function ObserverCameraControl({ focusTarget, beaconPos, orbitControlsRef }) {
  * High-Detail Orbital Satellite Model with 3D Drag Capability
  */
 function OrbitalSatelliteTarget({
-  trajectoryPreset = 'STATIONARY_HOVER',
+  trajectoryPreset: propTrajectory,
   beaconRef,
   onPosUpdate,
   dropLOS = false,
   showTrail = true,
-  targetVelocity = 0.0,
+  targetVelocity: propVelocity,
   isDraggable = false,
   orbitControlsRef,
   phaseOffset = 0
 }) {
-  const { targetManualPos, setTargetManualPos } = useAppStore();
+  const { 
+    targetManualPos, 
+    setTargetManualPos, 
+    trajectoryPreset: storeTrajectory, 
+    targetVelocity: storeVelocity 
+  } = useAppStore();
+
+  const activePreset = storeTrajectory || propTrajectory || 'STATIONARY_HOVER';
+  const activeVelocity = storeVelocity !== undefined ? storeVelocity : (propVelocity !== undefined ? propVelocity : 1.0);
+
   const groupRef = useRef();
   const satelliteBusRef = useRef();
   const trailPointsRef = useRef([]);
@@ -176,34 +185,41 @@ function OrbitalSatelliteTarget({
   useFrame((_, delta) => {
     simTimeRef.current += delta * targetVelocity;
     const t = simTimeRef.current + phaseOffset;
+  const lastTrailUpdateRef = useRef(0);
+  const lastPosUpdateRef = useRef(0);
+
+  useFrame(({ clock }, delta) => {
+    simTimeRef.current += delta * activeVelocity;
+    const t = simTimeRef.current;
+    const now = clock.getElapsedTime();
 
     let x = targetManualPos.x;
     let y = targetManualPos.y;
     let z = targetManualPos.z;
 
-    if (trajectoryPreset === 'STATIONARY_HOVER') {
+    if (activePreset === 'STATIONARY_HOVER') {
       x = targetManualPos.x;
       y = targetManualPos.y;
       z = targetManualPos.z;
-    } else if (trajectoryPreset === 'LINEAR_FLYBY') {
+    } else if (activePreset === 'LINEAR_FLYBY') {
       x = targetManualPos.x + (((t * 4) % 30) - 15);
       y = targetManualPos.y + Math.sin(t * 0.5) * 1.5;
       z = targetManualPos.z + Math.cos(t * 0.3) * 3;
-    } else if (trajectoryPreset === 'FIGURE_8') {
+    } else if (activePreset === 'FIGURE_8') {
       x = targetManualPos.x + Math.sin(t * 0.8) * 8;
       y = targetManualPos.y + Math.sin(t * 1.6) * 3;
       z = targetManualPos.z + Math.cos(t * 0.8) * 5;
-    } else if (trajectoryPreset === 'HIGH_G_EVASIVE') {
+    } else if (activePreset === 'HIGH_G_EVASIVE') {
       x = targetManualPos.x + Math.sin(t * 1.5) * 6 + Math.cos(t * 3.5) * 2;
       y = targetManualPos.y + Math.cos(t * 1.2) * 3 + Math.sin(t * 4.0) * 1.5;
       z = targetManualPos.z + Math.sin(t * 1.0) * 4;
-    } else if (trajectoryPreset === 'ERRATIC') {
+    } else if (activePreset === 'ERRATIC') {
       const step = Math.floor(t * 0.6);
       x = targetManualPos.x + Math.sin(t * 1.2) * 5 + Math.sin(step * 88) * 4;
       y = targetManualPos.y + Math.cos(t * 0.9) * 3 + Math.cos(step * 66) * 2.5;
       z = targetManualPos.z + Math.sin(t * 0.5) * 4;
     } else {
-      // Default Sinusoidal
+      // Sinusoidal
       x = targetManualPos.x + Math.sin(t * 0.8) * 6;
       y = targetManualPos.y + Math.cos(t * 0.5) * 3;
       z = targetManualPos.z + Math.sin(t * 0.4) * 4;
@@ -212,20 +228,29 @@ function OrbitalSatelliteTarget({
     if (groupRef.current) {
       groupRef.current.position.set(x, y, z);
       if (beaconRef) beaconRef.current = groupRef.current;
-      if (onPosUpdate) onPosUpdate(groupRef.current.position);
+
+      // Throttle onPosUpdate to ~20 FPS max to prevent unnecessary React re-renders
+      if (onPosUpdate && now - lastPosUpdateRef.current > 0.05) {
+        lastPosUpdateRef.current = now;
+        onPosUpdate(groupRef.current.position);
+      }
 
       if (satelliteBusRef.current) {
         satelliteBusRef.current.rotation.y = t * 0.3;
         satelliteBusRef.current.rotation.z = Math.sin(t * 0.2) * 0.15;
       }
 
-      const currentPos = [x, y, z];
-      trailPointsRef.current.push(currentPos);
-      if (trailPointsRef.current.length > 80) {
-        trailPointsRef.current.shift();
-      }
-      if (t % 0.1 < 0.033) {
-        setTrailPath([...trailPointsRef.current]);
+      // Throttle trail line array update to ~10 FPS max
+      if (showTrail) {
+        const currentPos = [x, y, z];
+        trailPointsRef.current.push(currentPos);
+        if (trailPointsRef.current.length > 80) {
+          trailPointsRef.current.shift();
+        }
+        if (now - lastTrailUpdateRef.current > 0.1) {
+          lastTrailUpdateRef.current = now;
+          setTrailPath([...trailPointsRef.current]);
+        }
       }
     }
   });
@@ -576,9 +601,15 @@ function BoresightGimbalRig({
       );
     }
 
-    if (beaconRef.current && boresightCamRef.current && onPixelErrorUpdate) {
-      const beaconPos = beaconRef.current.position.clone();
-      const proj = beaconPos.project(boresightCamRef.current);
+    if (beaconRef && beaconRef.current && boresightCamRef && boresightCamRef.current && onPixelErrorUpdate) {
+      // Force update world matrices for accurate projection
+      boresightCamRef.current.updateMatrixWorld(true);
+      beaconRef.current.updateMatrixWorld(true);
+
+      const beaconWorldPos = new THREE.Vector3();
+      beaconRef.current.getWorldPosition(beaconWorldPos);
+
+      const proj = beaconWorldPos.project(boresightCamRef.current);
 
       const targetWidth = 640;
       const targetHeight = 480;
@@ -736,6 +767,7 @@ export default function DualViewportScene({
   onPixelErrorUpdate,
   onCanvasReady
 }) {
+  const { showBoundingBox, showKalmanCentroid, binaryThreshold } = useAppStore();
   const beaconRef = useRef();
   const boresightCamRef = useRef();
   const orbitControlsRef = useRef();
@@ -812,7 +844,7 @@ export default function DualViewportScene({
               : 'col-span-7'
           }`}
         >
-          {/* Top-Left Locked Badge Pill & Drag Hint */}
+          {/* Top-Left Locked Badge Pill */}
           <div className="absolute top-3 left-3 z-20 flex items-center space-x-2">
             <div className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold flex items-center space-x-1.5 border ${
               isLocked
@@ -821,11 +853,6 @@ export default function DualViewportScene({
             }`}>
               <span className={`w-1.5 h-1.5 rounded-sm ${isLocked ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
               <span>{isLocked ? 'LOCKED' : 'SEARCHING'}</span>
-            </div>
-
-            <div className="px-2 py-1 rounded text-[9px] font-mono font-bold flex items-center space-x-1 border bg-slate-950/80 text-cyan-300 border-slate-700/80">
-              <Move className="w-3 h-3 text-amber-400" />
-              <span>DRAG TARGET IN VIEWPORT</span>
             </div>
           </div>
 

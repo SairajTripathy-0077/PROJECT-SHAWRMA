@@ -18,8 +18,6 @@ export default function ControlPanel() {
         return <EnvironmentPanel />;
       case 'OPTICAL SENSORS':
         return <CameraPanel />;
-      case 'CV MATRIX & MASK':
-        return <DetectionPanel />;
       case 'KALMAN & PID DECK':
         return <TrackingPanel />;
       case 'OPTICAL LINK BUDGET':

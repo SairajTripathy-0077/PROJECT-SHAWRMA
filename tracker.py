@@ -562,7 +562,7 @@ def extract_centroid_and_binary_preview(frame_b64: str) -> Tuple[Optional[Tuple[
         bin_b64 = base64.b64encode(buf).decode("utf-8")
         return centroid, bin_b64
     except Exception:
-        return None, None
+        return None, None, None
 
 
 def main():
