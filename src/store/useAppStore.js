@@ -102,8 +102,8 @@ const createDisturbanceSlice = (set, get) => ({
 const createReportsSlice = (set) => ({
   benchmarkStatus: 'IDLE',
   recentReports: [
-    { name: 'telemetry.csv', path: 'C:\\Users\\Sairaj Tripathy\\Desktop\\shawrma\\telemetry.csv', time: '22:00:15' },
-    { name: 'evaluation.json', path: 'C:\\Users\\Sairaj Tripathy\\Desktop\\shawrma\\evaluation.json', time: '22:00:15' }
+    { name: 'benchmark_telemetry_report.pdf', path: 'C:\\Users\\Sairaj Tripathy\\Desktop\\shawrma\\benchmark_telemetry_report.pdf', time: '23:49:09' },
+    { name: 'evaluation_summary_report.pdf', path: 'C:\\Users\\Sairaj Tripathy\\Desktop\\shawrma\\evaluation_summary_report.pdf', time: '22:00:15' }
   ],
   setBenchmarkStatus: (benchmarkStatus) => set({ benchmarkStatus }),
   addReport: (report) => set((state) => ({ recentReports: [report, ...state.recentReports] })),

@@ -119,6 +119,21 @@ fn reveal_in_explorer(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn save_benchmark_pdf(file_name: String, pdf_bytes: Vec<u8>) -> Result<String, String> {
+    use std::fs::File;
+    use std::io::Write;
+
+    let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
+    let file_path = current_dir.join(&file_name);
+    if let Ok(mut file) = File::create(&file_path) {
+        let _ = file.write_all(&pdf_bytes);
+    }
+
+    println!("[Tauri IPC] Benchmark PDF written to: {:?}", file_path);
+    Ok(file_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
 fn save_benchmark_csv(file_name: String, csv_data: String) -> Result<String, String> {
     use std::fs::File;
     use std::io::Write;
@@ -183,7 +198,8 @@ fn main() {
             process_frame,
             update_pid_gains,
             reveal_in_explorer,
-            save_benchmark_csv
+            save_benchmark_csv,
+            save_benchmark_pdf
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
