@@ -45,6 +45,20 @@ function CameraFrustumPyramid({ fov = 45, far = 20 }) {
  * Viewport A Observer Camera Dynamic Zoom & Object Tracking Controller
  */
 function ObserverCameraControl({ focusTarget, beaconPos, orbitControlsRef }) {
+  const lastTargetRef = useRef(focusTarget);
+  const transitioningRef = useRef(false);
+
+  React.useEffect(() => {
+    if (lastTargetRef.current !== focusTarget) {
+      lastTargetRef.current = focusTarget;
+      if (focusTarget === 'FREE_ORBIT') {
+        transitioningRef.current = true;
+        const timer = setTimeout(() => { transitioningRef.current = false; }, 800);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [focusTarget]);
+
   useFrame(({ camera }) => {
     if (!orbitControlsRef.current) return;
 
@@ -69,12 +83,12 @@ function ObserverCameraControl({ focusTarget, beaconPos, orbitControlsRef }) {
       camera.position.lerp(camPosGoal, 0.08);
       orbitControlsRef.current.target.lerp(midVec, 0.08);
       orbitControlsRef.current.update();
-    } else if (focusTarget === 'FREE_ORBIT') {
+    } else if (focusTarget === 'FREE_ORBIT' && transitioningRef.current) {
       const defaultTarget = new THREE.Vector3(0, 0, -10);
       const defaultCamPos = new THREE.Vector3(22, 16, 25);
 
-      camera.position.lerp(defaultCamPos, 0.05);
-      orbitControlsRef.current.target.lerp(defaultTarget, 0.05);
+      camera.position.lerp(defaultCamPos, 0.08);
+      orbitControlsRef.current.target.lerp(defaultTarget, 0.08);
       orbitControlsRef.current.update();
     }
   });
@@ -85,7 +99,7 @@ function ObserverCameraControl({ focusTarget, beaconPos, orbitControlsRef }) {
 /**
  * High-Detail Orbital Satellite Model
  */
-function OrbitalSatelliteTarget({ trajectoryPreset = 'SINUSOIDAL', beaconRef, onPosUpdate, dropLOS = false }) {
+function OrbitalSatelliteTarget({ trajectoryPreset = 'SINUSOIDAL', beaconRef, onPosUpdate, dropLOS = false, showTrail = true }) {
   const groupRef = useRef();
   const satelliteBusRef = useRef();
   const trailPointsRef = useRef([]);
@@ -220,7 +234,7 @@ function OrbitalSatelliteTarget({ trajectoryPreset = 'SINUSOIDAL', beaconRef, on
         </group>
       </group>
 
-      {trailPath.length > 2 && (
+      {showTrail && trailPath.length > 2 && (
         <Line points={trailPath} color="#00ffcc" lineWidth={2} transparent opacity={0.6} />
       )}
     </>
@@ -484,6 +498,72 @@ function BoresightGimbalRig({
   );
 }
 
+function CustomViewFocusDropdown({ focusTarget, setFocusTarget }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef(null);
+
+  const options = [
+    { value: 'FREE_ORBIT', label: 'Free Orbit' },
+    { value: 'TRACK_SATELLITE', label: 'Satellite' },
+    { value: 'FOCUS_GROUND_STATION', label: 'Ground Station' },
+    { value: 'BEAM_PATH_VIEW', label: 'Laser Vector' },
+  ];
+
+  const currentLabel = options.find((o) => o.value === focusTarget)?.label || 'Free Orbit';
+
+  React.useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (containerRef.current && !containerRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative z-50 pointer-events-auto"
+      onMouseDown={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="bg-slate-950/90 p-1 rounded border border-slate-700 flex items-center space-x-1 font-mono text-[10px]">
+        <span className="text-slate-400 font-bold px-1 select-none">View:</span>
+        <button
+          type="button"
+          onClick={() => setIsOpen(!isOpen)}
+          className="bg-slate-900 border border-slate-700 text-slate-200 px-2 py-0.5 rounded flex items-center space-x-1 hover:border-amber-500 font-bold cursor-pointer transition-all"
+        >
+          <span>{currentLabel}</span>
+          <span className="text-[8px] text-slate-400 ml-1">▼</span>
+        </button>
+      </div>
+
+      {isOpen && (
+        <div className="absolute top-full right-0 mt-1 w-36 bg-slate-950/95 border border-slate-700 rounded shadow-2xl py-1 z-50 font-mono text-[10px] backdrop-blur-md">
+          {options.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => {
+                setFocusTarget(option.value);
+                setIsOpen(false);
+              }}
+              className={`w-full text-left px-2.5 py-1 hover:bg-amber-500/20 hover:text-amber-300 font-semibold transition-all cursor-pointer ${
+                focusTarget === option.value ? 'text-amber-400 bg-slate-900 font-bold border-l-2 border-amber-500' : 'text-slate-300'
+              }`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function DualViewportScene({
   pan = 0,
   tilt = 0,
@@ -531,7 +611,9 @@ export default function DualViewportScene({
         <div className="flex items-center space-x-2">
           <button
             onClick={() => setFocusTarget('FREE_ORBIT')}
-            className="px-2 py-1 bg-slate-900 border border-slate-700 text-slate-300 hover:text-amber-400 text-[10px] font-mono font-bold rounded"
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="px-2 py-1 bg-slate-900 border border-slate-700 text-slate-300 hover:text-amber-400 text-[10px] font-mono font-bold rounded cursor-pointer"
           >
             :: VIEW
           </button>
@@ -563,27 +645,22 @@ export default function DualViewportScene({
           </div>
 
           {/* Top-Right Controls: Focus Selector & Fullscreen Toggle Buttons */}
-          <div className="absolute top-3 right-3 z-20 flex items-center space-x-2">
-            {/* View Target Selector Dropdown */}
-            <div className="bg-slate-950/90 p-1 rounded border border-slate-700 flex items-center space-x-1">
-              <span className="text-[10px] font-mono text-slate-400 font-bold px-1">View:</span>
-              <select
-                value={focusTarget}
-                onChange={(e) => setFocusTarget(e.target.value)}
-                className="bg-slate-900 border border-slate-700 text-slate-200 text-[10px] font-mono rounded px-1.5 py-0.5 outline-none cursor-pointer hover:border-amber-500"
-              >
-                <option value="FREE_ORBIT">Target ∨</option>
-                <option value="TRACK_SATELLITE">Satellite</option>
-                <option value="FOCUS_GROUND_STATION">Ground Station</option>
-                <option value="BEAM_PATH_VIEW">Laser Vector</option>
-              </select>
-            </div>
+          <div
+            className="absolute top-3 right-3 z-50 flex items-center space-x-2 pointer-events-auto"
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Custom Tactical View Target Selector Dropdown */}
+            <CustomViewFocusDropdown focusTarget={focusTarget} setFocusTarget={setFocusTarget} />
 
             {/* Viewport A Maximize / Restore Button */}
             <button
               onClick={() => setFullscreenMode(fullscreenMode === 'VIEWPORT_A' ? 'SPLIT' : 'VIEWPORT_A')}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
               title="Maximize Viewport A"
-              className="bg-slate-950/90 p-1.5 rounded border border-slate-700 text-slate-300 hover:text-amber-400"
+              className="bg-slate-950/90 p-1.5 rounded border border-slate-700 text-slate-300 hover:text-amber-400 cursor-pointer"
             >
               {fullscreenMode === 'VIEWPORT_A' ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
             </button>
@@ -591,8 +668,10 @@ export default function DualViewportScene({
             {/* App-Wide OS Fullscreen Button */}
             <button
               onClick={toggleAppFullscreen}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
               title="Toggle OS Fullscreen"
-              className="bg-slate-950/90 p-1.5 rounded border border-slate-700 text-slate-300 hover:text-amber-400"
+              className="bg-slate-950/90 p-1.5 rounded border border-slate-700 text-slate-300 hover:text-amber-400 cursor-pointer"
             >
               <Monitor className="w-3 h-3" />
             </button>
@@ -619,6 +698,7 @@ export default function DualViewportScene({
               beaconRef={beaconRef}
               onPosUpdate={(pos) => setBeaconPos(pos)}
               dropLOS={dropLOS}
+              showTrail={showPIP}
             />
 
             <OpticalLaserBeam isLocked={isLocked} beaconPos={beaconPos} />
@@ -627,15 +707,7 @@ export default function DualViewportScene({
             <gridHelper args={[100, 100, '#1e293b', '#0f172a']} position={[0, -4.5, 0]} />
           </Canvas>
 
-          {/* Bottom-Right Overlay Buttons (FOV / Labels) */}
-          <div className="absolute bottom-3 right-3 z-20 flex items-center space-x-1 text-[9px] font-mono">
-            <button className="px-2 py-0.5 bg-slate-950/90 border border-slate-700 text-slate-300 rounded hover:text-amber-400">
-              ■ FOV
-            </button>
-            <button className="px-2 py-0.5 bg-slate-950/90 border border-slate-700 text-slate-300 rounded hover:text-amber-400">
-              ■ Labels
-            </button>
-          </div>
+
         </div>
 
         {/* VIEWPORT B: Gimbal Sensor Boresight Feed */}
@@ -656,10 +728,17 @@ export default function DualViewportScene({
           </div>
 
           {/* Viewport B Top Controls: PIP & Maximize */}
-          <div className="absolute top-3 right-3 z-20 flex items-center space-x-1.5">
+          <div
+            className="absolute top-3 right-3 z-50 flex items-center space-x-1.5 pointer-events-auto"
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
             <button
               onClick={() => setShowPIP(!showPIP)}
-              className="bg-slate-950/90 px-2 py-1 rounded text-[10px] font-mono text-slate-300 border border-slate-700 hover:text-amber-400 flex items-center"
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              className="bg-slate-950/90 px-2 py-1 rounded text-[10px] font-mono text-slate-300 border border-slate-700 hover:text-amber-400 flex items-center cursor-pointer"
             >
               {showPIP ? <Eye className="w-3 h-3 inline mr-1" /> : <EyeOff className="w-3 h-3 inline mr-1" />}
               {showPIP ? 'HIDE PIP' : 'SHOW PIP'}
@@ -667,8 +746,10 @@ export default function DualViewportScene({
 
             <button
               onClick={() => setFullscreenMode(fullscreenMode === 'VIEWPORT_B' ? 'SPLIT' : 'VIEWPORT_B')}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
               title="Maximize Viewport B"
-              className="bg-slate-950/90 p-1.5 rounded border border-slate-700 text-slate-300 hover:text-amber-400"
+              className="bg-slate-950/90 p-1.5 rounded border border-slate-700 text-slate-300 hover:text-amber-400 cursor-pointer"
             >
               {fullscreenMode === 'VIEWPORT_B' ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
             </button>
@@ -695,7 +776,7 @@ export default function DualViewportScene({
               onPixelErrorUpdate={onPixelErrorUpdate}
             />
 
-            <OrbitalSatelliteTarget trajectoryPreset={trajectoryPreset} beaconRef={beaconRef} dropLOS={dropLOS} />
+            <OrbitalSatelliteTarget trajectoryPreset={trajectoryPreset} beaconRef={beaconRef} dropLOS={dropLOS} showTrail={showPIP} />
             <EnvironmentalDisturbances turbulenceIntensity={turbulenceIntensity} dropLOS={dropLOS} />
           </Canvas>
 
@@ -752,7 +833,9 @@ export default function DualViewportScene({
         <div className="flex items-center space-x-2 text-slate-400">
           <button
             onClick={() => setFocusTarget(focusTarget === 'TRACK_SATELLITE' ? 'FREE_ORBIT' : 'TRACK_SATELLITE')}
-            className="px-2 py-0.5 bg-slate-900 border border-slate-700 text-slate-300 hover:text-amber-400 rounded font-bold"
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="px-2 py-0.5 bg-slate-900 border border-slate-700 text-slate-300 hover:text-amber-400 rounded font-bold cursor-pointer"
           >
             - TARGET
           </button>

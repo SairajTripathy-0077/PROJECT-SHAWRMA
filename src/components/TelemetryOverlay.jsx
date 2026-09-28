@@ -67,7 +67,7 @@ export default function TelemetryOverlay({
               FSOC PAT SIMULATOR
             </h1>
             <p className="text-[11px] text-slate-400 font-mono">
-              ASTERIA KINEMATIC GIMBAL ENGINE v2.0
+              RHEA KINEMATIC GIMBAL ENGINE v2.0
             </p>
           </div>
         </div>
