@@ -172,9 +172,13 @@ function OrbitalSatelliteTarget({
     }
   };
 
-  useFrame((_, delta) => {
+  const lastTrailUpdateRef = useRef(0);
+  const lastPosUpdateRef = useRef(0);
+
+  useFrame(({ clock }, delta) => {
     simTimeRef.current += delta * targetVelocity;
     const t = simTimeRef.current;
+    const now = clock.getElapsedTime();
 
     let x = targetManualPos.x;
     let y = targetManualPos.y;
@@ -202,7 +206,7 @@ function OrbitalSatelliteTarget({
       y = targetManualPos.y + Math.cos(t * 0.9) * 3 + Math.cos(step * 66) * 2.5;
       z = targetManualPos.z + Math.sin(t * 0.5) * 4;
     } else {
-      // Default Sinusoidal
+      // Sinusoidal
       x = targetManualPos.x + Math.sin(t * 0.8) * 6;
       y = targetManualPos.y + Math.cos(t * 0.5) * 3;
       z = targetManualPos.z + Math.sin(t * 0.4) * 4;
@@ -211,20 +215,29 @@ function OrbitalSatelliteTarget({
     if (groupRef.current) {
       groupRef.current.position.set(x, y, z);
       if (beaconRef) beaconRef.current = groupRef.current;
-      if (onPosUpdate) onPosUpdate(groupRef.current.position);
+
+      // Throttle onPosUpdate to ~20 FPS max to prevent unnecessary React re-renders
+      if (onPosUpdate && now - lastPosUpdateRef.current > 0.05) {
+        lastPosUpdateRef.current = now;
+        onPosUpdate(groupRef.current.position);
+      }
 
       if (satelliteBusRef.current) {
         satelliteBusRef.current.rotation.y = t * 0.3;
         satelliteBusRef.current.rotation.z = Math.sin(t * 0.2) * 0.15;
       }
 
-      const currentPos = [x, y, z];
-      trailPointsRef.current.push(currentPos);
-      if (trailPointsRef.current.length > 80) {
-        trailPointsRef.current.shift();
-      }
-      if (t % 0.1 < 0.033) {
-        setTrailPath([...trailPointsRef.current]);
+      // Throttle trail line array update to ~10 FPS max
+      if (showTrail) {
+        const currentPos = [x, y, z];
+        trailPointsRef.current.push(currentPos);
+        if (trailPointsRef.current.length > 80) {
+          trailPointsRef.current.shift();
+        }
+        if (now - lastTrailUpdateRef.current > 0.1) {
+          lastTrailUpdateRef.current = now;
+          setTrailPath([...trailPointsRef.current]);
+        }
       }
     }
   });
