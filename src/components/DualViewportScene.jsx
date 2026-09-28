@@ -1,8 +1,8 @@
 import React, { useRef, useMemo, useState } from 'react';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { Canvas, useFrame } from '@react-three/fiber';
 import { Stars, OrbitControls, PerspectiveCamera, Line } from '@react-three/drei';
 import * as THREE from 'three';
-import { Eye, Shield, Zap, EyeOff } from 'lucide-react';
+import { Eye, Zap, EyeOff } from 'lucide-react';
 
 /**
  * Platform Jitter procedural noise helper
@@ -15,9 +15,36 @@ function getPlatformJitter(time, amplitude = 0.05, frequency = 25.0) {
 }
 
 /**
- * Airborne Drone Target Beacon with Trajectory Trail & Presets
+ * Dynamic 3D Camera FOV Frustum Wireframe Pyramid
  */
-function AirborneTarget({ trajectoryPreset = 'SINUSOIDAL', beaconRef, onPosUpdate }) {
+function CameraFrustumPyramid({ fov = 45, far = 20 }) {
+  const points = useMemo(() => {
+    const fovRad = (fov * Math.PI) / 180;
+    const h = 2 * Math.tan(fovRad / 2) * far;
+    const w = h * (4 / 3);
+    const x = w / 2;
+    const y = h / 2;
+    const z = -far;
+
+    return [
+      [0, 0, 0], [x, y, z],
+      [0, 0, 0], [-x, y, z],
+      [0, 0, 0], [-x, -y, z],
+      [0, 0, 0], [x, -y, z],
+      [x, y, z], [-x, y, z],
+      [-x, y, z], [-x, -y, z],
+      [-x, -y, z], [x, -y, z],
+      [x, -y, z], [x, y, z]
+    ];
+  }, [fov, far]);
+
+  return <Line points={points} color="#00f3ff" lineWidth={1.5} transparent opacity={0.5} />;
+}
+
+/**
+ * Airborne Target Beacon with Trajectory Trail & Presets
+ */
+function AirborneTarget({ trajectoryPreset = 'SINUSOIDAL', beaconRef, onPosUpdate, dropLOS = false }) {
   const meshRef = useRef();
   const trailPointsRef = useRef([]);
   const [trailPath, setTrailPath] = useState([]);
@@ -40,8 +67,8 @@ function AirborneTarget({ trajectoryPreset = 'SINUSOIDAL', beaconRef, onPosUpdat
       z = -20 + Math.sin(t * 1.0) * 4;
     } else if (trajectoryPreset === 'ERRATIC') {
       const step = Math.floor(t * 0.6);
-      x = Math.sin(t * 1.2) * 5 + (Math.sin(step * 88) * 4);
-      y = Math.cos(t * 0.9) * 3 + 3 + (Math.cos(step * 66) * 2.5);
+      x = Math.sin(t * 1.2) * 5 + Math.sin(step * 88) * 4;
+      y = Math.cos(t * 0.9) * 3 + 3 + Math.cos(step * 66) * 2.5;
       z = -20 + Math.sin(t * 0.5) * 4;
     } else {
       // Default Sinusoidal
@@ -55,7 +82,6 @@ function AirborneTarget({ trajectoryPreset = 'SINUSOIDAL', beaconRef, onPosUpdat
       if (beaconRef) beaconRef.current = meshRef.current;
       if (onPosUpdate) onPosUpdate(meshRef.current.position);
 
-      // Trajectory trail history
       const currentPos = [x, y, z];
       trailPointsRef.current.push(currentPos);
       if (trailPointsRef.current.length > 80) {
@@ -70,33 +96,29 @@ function AirborneTarget({ trajectoryPreset = 'SINUSOIDAL', beaconRef, onPosUpdat
   return (
     <>
       <group ref={meshRef} position={[0, 3, -20]}>
-        {/* Drone Body Frame */}
         <mesh>
           <cylinderGeometry args={[0.5, 0.5, 0.15, 8]} />
           <meshStandardMaterial color="#1e293b" metalness={0.9} roughness={0.2} />
         </mesh>
 
-        {/* Optical Laser Beacon Core */}
         <mesh position={[0, 0, 0]}>
           <sphereGeometry args={[0.35, 32, 32]} />
           <meshStandardMaterial
             color="#00ffcc"
             emissive="#00ffcc"
-            emissiveIntensity={3.5}
+            emissiveIntensity={dropLOS ? 0.2 : 3.5}
             roughness={0.1}
           />
         </mesh>
 
-        {/* Halo Glow Ring */}
         <mesh scale={[1.4, 1.4, 1.4]}>
           <sphereGeometry args={[0.35, 16, 16]} />
-          <meshBasicMaterial color="#38bdf8" transparent opacity={0.35} wireframe />
+          <meshBasicMaterial color={dropLOS ? "#f59e0b" : "#38bdf8"} transparent opacity={0.35} wireframe />
         </mesh>
 
-        <pointLight color="#00ffcc" intensity={10} distance={35} decay={1} />
+        {!dropLOS && <pointLight color="#00ffcc" intensity={10} distance={35} decay={1} />}
       </group>
 
-      {/* Trajectory Trail */}
       {trailPath.length > 2 && (
         <Line points={trailPath} color="#00ffcc" lineWidth={2} transparent opacity={0.6} />
       )}
@@ -105,7 +127,7 @@ function AirborneTarget({ trajectoryPreset = 'SINUSOIDAL', beaconRef, onPosUpdat
 }
 
 /**
- * Optical Laser Transmission Beam
+ * Optical Laser Transmission Beam Line
  */
 function OpticalLaserBeam({ isLocked, beaconPos }) {
   if (!isLocked || !beaconPos) return null;
@@ -117,9 +139,9 @@ function OpticalLaserBeam({ isLocked, beaconPos }) {
     <Line
       points={[terminalPos, targetPos]}
       color="#00ffcc"
-      lineWidth={4}
+      lineWidth={3.5}
       transparent
-      opacity={0.95}
+      opacity={0.9}
     />
   );
 }
@@ -130,19 +152,16 @@ function OpticalLaserBeam({ isLocked, beaconPos }) {
 function GroundStationTerminal() {
   return (
     <group position={[0, -4, 0]}>
-      {/* Heavy Base Mount */}
       <mesh position={[0, -0.5, 0]}>
         <cylinderGeometry args={[2.0, 2.5, 1.0, 16]} />
         <meshStandardMaterial color="#0f172a" metalness={0.8} roughness={0.3} />
       </mesh>
 
-      {/* Gimbal Fork Pedestal */}
       <mesh position={[0, 0.5, 0]}>
         <boxGeometry args={[1.2, 1.2, 1.2]} />
         <meshStandardMaterial color="#334155" metalness={0.9} roughness={0.2} />
       </mesh>
 
-      {/* Optical Telescope Barrel */}
       <mesh position={[0, 1.2, 0]} rotation={[Math.PI / 4, 0, 0]}>
         <cylinderGeometry args={[0.4, 0.5, 1.6, 24]} />
         <meshStandardMaterial color="#0284c7" emissive="#0284c7" emissiveIntensity={0.2} />
@@ -152,7 +171,7 @@ function GroundStationTerminal() {
 }
 
 /**
- * Simulated Atmospheric Turbulence Fog Bank Mesh
+ * Simulated Atmospheric Turbulence Fog Mesh
  */
 function EnvironmentalDisturbances({ turbulenceIntensity = 0, dropLOS = false }) {
   const fogRef = useRef();
@@ -167,9 +186,8 @@ function EnvironmentalDisturbances({ turbulenceIntensity = 0, dropLOS = false })
 
   return (
     <group ref={fogRef} position={[0, 2, -10]}>
-      {/* Cloud/Fog Bank Mesh Volume */}
       <mesh>
-        <boxGeometry args={[20, 10, 8]} />
+        <boxGeometry args={[22, 12, 8]} />
         <meshStandardMaterial
           color={dropLOS ? "#334155" : "#0284c7"}
           transparent
@@ -191,6 +209,7 @@ function BoresightGimbalRig({
   jitterFreq,
   boresightCamRef,
   beaconRef,
+  zoomFov = 45,
   onPixelErrorUpdate
 }) {
   const panRef = useRef();
@@ -200,19 +219,20 @@ function BoresightGimbalRig({
     const t = clock.getElapsedTime();
     const { jx, jy } = getPlatformJitter(t, jitterAmp, jitterFreq);
 
+    // Tight 0.35 lerp interpolation preventing phase lag overshooting
     if (panRef.current) {
       panRef.current.rotation.y = THREE.MathUtils.lerp(
         panRef.current.rotation.y,
-        (pan * Math.PI) / 180 + jx,
-        0.18
+        (-pan * Math.PI) / 180 + jx,
+        0.35
       );
     }
 
     if (tiltRef.current) {
       tiltRef.current.rotation.x = THREE.MathUtils.lerp(
         tiltRef.current.rotation.x,
-        (tilt * Math.PI) / 180 + jy,
-        0.18
+        (-tilt * Math.PI) / 180 + jy,
+        0.35
       );
     }
 
@@ -239,12 +259,13 @@ function BoresightGimbalRig({
         <PerspectiveCamera
           ref={boresightCamRef}
           makeDefault
-          fov={45}
+          fov={zoomFov}
           aspect={4 / 3}
           position={[0, 1.2, 0]}
           near={0.1}
           far={1000}
         />
+        <CameraFrustumPyramid fov={zoomFov} />
       </group>
     </group>
   );
@@ -253,6 +274,7 @@ function BoresightGimbalRig({
 export default function DualViewportScene({
   pan = 0,
   tilt = 0,
+  zoomFov = 45,
   jitterAmp = 0.05,
   jitterFreq = 25.0,
   turbulenceIntensity = 0,
@@ -270,7 +292,7 @@ export default function DualViewportScene({
   const [showPIP, setShowPIP] = useState(true);
 
   return (
-    <div className="w-full h-full relative bg-slate-950 grid grid-cols-12 gap-2 p-2">
+    <div className="w-full h-full relative bg-slate-950 grid grid-cols-12 gap-2 p-2 select-none">
       {/* VIEWPORT A: Global Tactical 3D Observer */}
       <div className="col-span-7 relative rounded-xl overflow-hidden border border-slate-800 bg-slate-950">
         <div className="absolute top-3 left-3 z-10 glass-panel px-3 py-1.5 rounded-lg flex items-center space-x-2 border border-slate-700">
@@ -286,23 +308,17 @@ export default function DualViewportScene({
           <Stars radius={120} depth={50} count={6000} factor={4} saturation={0} fade speed={1} />
           <OrbitControls makeDefault enablePan={true} maxPolarAngle={Math.PI / 2 + 0.1} />
 
-          {/* Observer Camera Position */}
-          <PerspectiveCamera makeDefault fov={50} position={[20, 15, 25]} />
-
-          {/* Ground Station Terminal */}
+          <PerspectiveCamera makeDefault fov={50} position={[22, 16, 25]} />
           <GroundStationTerminal />
 
-          {/* Airborne Target */}
           <AirborneTarget
             trajectoryPreset={trajectoryPreset}
             beaconRef={beaconRef}
             onPosUpdate={(pos) => setBeaconPos(pos)}
+            dropLOS={dropLOS}
           />
 
-          {/* Laser Beam Vector */}
           <OpticalLaserBeam isLocked={isLocked} beaconPos={beaconPos} />
-
-          {/* Disturbance Volumes */}
           <EnvironmentalDisturbances turbulenceIntensity={turbulenceIntensity} dropLOS={dropLOS} />
 
           <gridHelper args={[100, 100, '#1e293b', '#0f172a']} position={[0, -4.5, 0]} />
@@ -314,17 +330,16 @@ export default function DualViewportScene({
         <div className="absolute top-3 left-3 z-10 glass-panel px-3 py-1.5 rounded-lg flex items-center space-x-2 border border-cyan-500/40">
           <Zap className="w-4 h-4 text-amber-400 animate-pulse" />
           <span className="text-xs font-mono font-bold text-cyan-300">
-            VIEWPORT B: GIMBAL BORESIGHT (45° FOV)
+            VIEWPORT B: SENSOR BORESIGHT (FOV {zoomFov}°)
           </span>
         </div>
 
-        {/* PIP Toggle Button */}
         <button
           onClick={() => setShowPIP(!showPIP)}
           className="absolute top-3 right-3 z-20 glass-panel px-2 py-1 rounded text-[11px] font-mono text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/20"
         >
           {showPIP ? <Eye className="w-3.5 h-3.5 inline mr-1" /> : <EyeOff className="w-3.5 h-3.5 inline mr-1" />}
-          {showPIP ? 'HIDE OpenCV PIP' : 'SHOW OpenCV PIP'}
+          {showPIP ? 'HIDE PIP' : 'SHOW PIP'}
         </button>
 
         <Canvas
@@ -344,14 +359,15 @@ export default function DualViewportScene({
             jitterFreq={jitterFreq}
             boresightCamRef={boresightCamRef}
             beaconRef={beaconRef}
+            zoomFov={zoomFov}
             onPixelErrorUpdate={onPixelErrorUpdate}
           />
 
-          <AirborneTarget trajectoryPreset={trajectoryPreset} beaconRef={beaconRef} />
+          <AirborneTarget trajectoryPreset={trajectoryPreset} beaconRef={beaconRef} dropLOS={dropLOS} />
           <EnvironmentalDisturbances turbulenceIntensity={turbulenceIntensity} dropLOS={dropLOS} />
         </Canvas>
 
-        {/* Boresight HUD Reticle */}
+        {/* Reticle Overlay */}
         <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
           <div className="relative w-64 h-64 border border-cyan-500/30 rounded-full flex items-center justify-center">
             <div className="absolute w-full h-[1px] bg-cyan-500/40" />
@@ -363,7 +379,7 @@ export default function DualViewportScene({
           </div>
         </div>
 
-        {/* OpenCV Thresholded Binary PIP Feed */}
+        {/* OpenCV Binary PIP Feed */}
         {showPIP && binaryFrameB64 && (
           <div className="absolute bottom-4 right-4 z-20 w-36 h-28 glass-panel p-1 rounded-lg border border-emerald-500/40 flex flex-col justify-between">
             <div className="text-[9px] font-mono text-emerald-400 font-bold px-1">

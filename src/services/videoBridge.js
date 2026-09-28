@@ -1,7 +1,6 @@
 /**
  * VideoBridge Service for FSOC PAT Virtual Simulator
- * Handles frame extraction from R3F WebGL canvas and manages communication
- * with the Python OpenCV + EKF + PID Vision Backend via Tauri IPC or WebSocket/Local bridge.
+ * Phase 5 Low-Latency Bridge Integration
  */
 
 class VideoBridge {
@@ -20,10 +19,10 @@ class VideoBridge {
     this.onTelemetryCallback = onTelemetry;
 
     if (!this.isTauriAvailable) {
-      console.log('[VideoBridge] Tauri environment not detected. Initializing WebSocket/Local Bridge...');
+      console.log('[VideoBridge] Initializing WebSocket/Local Bridge connection...');
       this.initWebSocket(wsUrl);
     } else {
-      console.log('[VideoBridge] Tauri environment detected. Using Tauri IPC bridge.');
+      console.log('[VideoBridge] Tauri IPC environment active.');
       this.initTauriIPC();
     }
   }
@@ -31,9 +30,9 @@ class VideoBridge {
   initWebSocket(wsUrl) {
     try {
       this.ws = new WebSocket(wsUrl);
-      
+
       this.ws.onopen = () => {
-        console.log('[VideoBridge] Connected to Python vision sidecar via WebSocket.');
+        console.log('[VideoBridge] Connected to Python vision sidecar on port 8765.');
         this.isConnected = true;
       };
 
@@ -42,7 +41,7 @@ class VideoBridge {
           const payload = JSON.parse(event.data);
           this.handleBackendResponse(payload);
         } catch (err) {
-          console.error('[VideoBridge] Error parsing backend telemetry:', err);
+          console.error('[VideoBridge] Telemetry parse error:', err);
         }
         this.isProcessingFrame = false;
       };
@@ -55,7 +54,7 @@ class VideoBridge {
         this.isConnected = false;
       };
     } catch (e) {
-      console.warn('[VideoBridge] Could not initiate WebSocket:', e);
+      console.warn('[VideoBridge] WebSocket connection error:', e);
     }
   }
 
@@ -68,7 +67,7 @@ class VideoBridge {
       });
       this.isConnected = true;
     } catch (e) {
-      console.error('[VideoBridge] Failed to register Tauri IPC listeners:', e);
+      console.error('[VideoBridge] Failed to set up Tauri listener:', e);
     }
   }
 
@@ -124,14 +123,10 @@ class VideoBridge {
     if (dropLOS) {
       this.handleBackendResponse({
         state: 'PREDICTIVE_HOLD',
-        pan_velocity: 0.0,
-        tilt_velocity: 0.0,
+        pan_vel: 0.0,
+        tilt_vel: 0.0,
         error_px: [errX, errY],
-        predicted_px: [errX * 0.9, errY * 0.9],
-        locked: false,
-        fps: this.fps,
-        cv_latency_ms: 3.2,
-        binary_frame_b64: null
+        rmse: Math.sqrt(errX * errX + errY * errY)
       });
       return;
     }
@@ -139,20 +134,19 @@ class VideoBridge {
     const kpPan = pidGains ? pidGains.kp_pan : 0.08;
     const kpTilt = pidGains ? pidGains.kp_tilt : 0.08;
 
-    const panVel = errX * kpPan;
-    const tiltVel = -errY * kpTilt;
+    // Closed-loop PID velocity scaling with correct negative feedback sign
+    const panVel = Math.max(Math.min(errX * kpPan * 0.05, 2.0), -2.0);
+    const tiltVel = Math.max(Math.min(errY * kpTilt * 0.05, 2.0), -2.0);
+
     const isLocked = Math.abs(errX) < 15 && Math.abs(errY) < 15;
+    const rmse = Math.sqrt(errX * errX + errY * errY);
 
     this.handleBackendResponse({
       state: isLocked ? 'TRACKING' : 'ACQUIRE',
-      pan_velocity: Math.max(Math.min(panVel, 20.0), -20.0),
-      tilt_velocity: Math.max(Math.min(tiltVel, 20.0), -20.0),
-      error_px: [errX, errY],
-      predicted_px: [errX * 0.95, errY * 0.95],
-      locked: isLocked,
-      fps: this.fps,
-      cv_latency_ms: 3.2,
-      binary_frame_b64: null
+      pan_vel: roundVal(panVel, 5),
+      tilt_vel: roundVal(tiltVel, 5),
+      error_px: [roundVal(errX, 1), roundVal(errY, 1)],
+      rmse: roundVal(rmse, 2)
     });
   }
 
@@ -167,6 +161,10 @@ class VideoBridge {
       this.ws.close();
     }
   }
+}
+
+function roundVal(val, decimals) {
+  return Number(Math.round(val + 'e' + decimals) + 'e-' + decimals);
 }
 
 export const videoBridge = new VideoBridge();

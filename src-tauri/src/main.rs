@@ -5,8 +5,10 @@ mod bridge;
 
 use bridge::BridgeServer;
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
-use tauri::State;
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FramePayload {
@@ -31,66 +33,88 @@ pub struct PidTuningGains {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TrackerTelemetryResponse {
     pub state: String,
-    pub pan_velocity: f64,
-    pub tilt_velocity: f64,
+    pub pan_vel: f64,
+    pub tilt_vel: f64,
     pub error_px: [f64; 2],
-    pub predicted_px: [f64; 2],
-    pub locked: bool,
-    pub fps: f64,
-    pub cv_latency_ms: f64,
-    pub binary_frame_b64: Option<String>,
+    pub rmse: f64,
+}
+
+pub struct PythonSidecarProcess {
+    pub child: Arc<Mutex<Option<Child>>>,
+}
+
+impl Drop for PythonSidecarProcess {
+    fn drop(&mut self) {
+        if let Ok(mut lock) = self.child.lock() {
+            if let Some(mut child) = lock.take() {
+                println!("[Rust Subprocess] Terminating Python tracker child process...");
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
 }
 
 pub struct AppState {
     pub gains: Mutex<PidTuningGains>,
+    pub sidecar: PythonSidecarProcess,
 }
 
 #[tauri::command]
 fn update_pid_gains(gains: PidTuningGains, state: State<'_, AppState>) -> Result<String, String> {
     let mut current_gains = state.gains.lock().map_err(|e| e.to_string())?;
     *current_gains = gains.clone();
-    println!("[Tauri IPC] Gains Synchronized: {:?}", gains);
-    Ok("Gains updated successfully".into())
+    println!("[Tauri IPC] Live Gains Updated: {:?}", gains);
+    Ok("Gains updated".into())
 }
 
 #[tauri::command]
 fn process_frame(payload: FramePayload, state: State<'_, AppState>) -> Result<TrackerTelemetryResponse, String> {
     let current_gains = state.gains.lock().map_err(|e| e.to_string())?.clone();
-    let start_time = std::time::Instant::now();
 
     let drop_los = payload.drop_los.unwrap_or(false);
     if drop_los {
         return Ok(TrackerTelemetryResponse {
             state: "PREDICTIVE_HOLD".into(),
-            pan_velocity: 0.0,
-            tilt_velocity: 0.0,
+            pan_vel: 0.0,
+            tilt_vel: 0.0,
             error_px: [payload.error_x, payload.error_y],
-            predicted_px: [payload.error_x * 0.9, payload.error_y * 0.9],
-            locked: false,
-            fps: 60.0,
-            cv_latency_ms: 3.1,
-            binary_frame_b64: None,
+            rmse: (payload.error_x * payload.error_x + payload.error_y * payload.error_y).sqrt(),
         });
     }
 
     let kp = current_gains.kp_pan;
-    let pan_vel = (payload.error_x * kp).clamp(-20.0, 20.0);
-    let tilt_vel = (-payload.error_y * current_gains.kp_tilt).clamp(-20.0, 20.0);
+    let pan_v = (payload.error_x * kp * 0.002).clamp(-2.0, 2.0);
+    let tilt_v = (-payload.error_y * current_gains.kp_tilt * 0.002).clamp(-2.0, 2.0);
+    let rmse = (payload.error_x * payload.error_x + payload.error_y * payload.error_y).sqrt();
 
-    let cv_latency = start_time.elapsed().as_secs_f64() * 1000.0;
     let is_locked = payload.error_x.abs() < 15.0 && payload.error_y.abs() < 15.0;
 
     Ok(TrackerTelemetryResponse {
         state: if is_locked { "TRACKING".into() } else { "ACQUIRE".into() },
-        pan_velocity: pan_vel,
-        tilt_velocity: tilt_vel,
+        pan_vel: pan_v,
+        tilt_vel: tilt_v,
         error_px: [payload.error_x, payload.error_y],
-        predicted_px: [payload.error_x * 0.95, payload.error_y * 0.95],
-        locked: is_locked,
-        fps: 60.0,
-        cv_latency_ms: cv_latency,
-        binary_frame_b64: None,
+        rmse,
     })
+}
+
+fn spawn_python_sidecar() -> Arc<Mutex<Option<Child>>> {
+    println!("[Rust Subprocess] Spawning Python sidecar tracker process...");
+    let child_res = Command::new("python")
+        .arg("backend/tracker.py")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn();
+
+    match child_res {
+        Ok(child) => Arc::new(Mutex::new(Some(child))),
+        Err(err) => {
+            eprintln!("[Rust Subprocess] Failed to spawn Python sidecar: {}", err);
+            Arc::new(Mutex::new(None))
+        }
+    }
 }
 
 fn main() {
@@ -103,20 +127,30 @@ fn main() {
         kd_tilt: 0.015,
     };
 
-    // Spawn async Tokio TCP bridge server on port 8765
+    let sidecar_handle = spawn_python_sidecar();
+
+    // Spawn Tokio TCP Bridge Server on port 8765
     tauri::async_runtime::spawn(async move {
         let bridge = BridgeServer::new(8765);
         if let Err(err) = bridge.start().await {
-            eprintln!("[Rust Main] Bridge server error: {}", err);
+            eprintln!("[Rust Bridge Error] {}", err);
         }
     });
 
     tauri::Builder::default()
         .manage(AppState {
             gains: Mutex::new(initial_gains),
+            sidecar: PythonSidecarProcess {
+                child: sidecar_handle,
+            },
         })
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![process_frame, update_pid_gains])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                println!("[Tauri Window] Window close requested. Cleaning up child processes...");
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running FSOC PAT Tauri application");
 }
