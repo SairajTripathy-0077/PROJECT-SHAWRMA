@@ -1,6 +1,6 @@
 import React from 'react';
 import { useAppStore } from '../../store/useAppStore';
-import { Globe, Sun, Moon, Compass, Gauge } from 'lucide-react';
+import { Globe, Sun, Moon, Compass, Gauge, Anchor, Play } from 'lucide-react';
 
 export default function EnvironmentPanel() {
   const { 
@@ -18,7 +18,7 @@ export default function EnvironmentPanel() {
       <div className="flex items-center justify-between border-b border-slate-800 pb-2">
         <div className="flex items-center space-x-2 text-amber-400 font-bold">
           <Globe className="w-4 h-4 text-amber-400 animate-pulse" />
-          <span className="tracking-wider">01. ORBITAL BIOME & TRAJECTORY MATRIX</span>
+          <span className="tracking-wider">ORBITAL BIOME & TRAJECTORY MATRIX</span>
         </div>
         <span className="text-[10px] text-emerald-400 font-bold bg-emerald-950/60 border border-emerald-500/30 px-2 py-0.5 rounded">
           PHYSICS ACTIVE
@@ -63,7 +63,7 @@ export default function EnvironmentPanel() {
           </div>
           <input
             type="range"
-            min="0.1"
+            min="0.0"
             max="4.0"
             step="0.1"
             value={targetVelocity}
@@ -73,17 +73,41 @@ export default function EnvironmentPanel() {
         </div>
       </div>
 
-      {/* Trajectory Dropdown */}
+      {/* Trajectory Dropdown & Hold Position Quick Action */}
       <div className="bg-slate-900/90 p-3 rounded-lg border border-slate-800 space-y-2">
-        <label className="text-slate-400 font-bold text-[10px] flex items-center space-x-1">
-          <Compass className="w-3.5 h-3.5 text-cyan-400" />
-          <span>KINEMATIC TRAJECTORY PATTERN</span>
-        </label>
+        <div className="flex justify-between items-center">
+          <label className="text-slate-400 font-bold text-[10px] flex items-center space-x-1">
+            <Compass className="w-3.5 h-3.5 text-cyan-400" />
+            <span>KINEMATIC TRAJECTORY PATTERN</span>
+          </label>
+          
+          <button
+            onClick={() => {
+              if (trajectoryPreset === 'STATIONARY_HOVER') {
+                setTrajectoryPreset('SINUSOIDAL');
+                setTargetVelocity(1.0);
+              } else {
+                setTrajectoryPreset('STATIONARY_HOVER');
+                setTargetVelocity(0.0);
+              }
+            }}
+            className={`px-2.5 py-1 rounded text-[10px] font-bold border flex items-center space-x-1 transition-all cursor-pointer ${
+              trajectoryPreset === 'STATIONARY_HOVER' || targetVelocity === 0
+                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50 glow-emerald'
+                : 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
+            }`}
+          >
+            <Anchor className="w-3 h-3 text-cyan-400" />
+            <span>{trajectoryPreset === 'STATIONARY_HOVER' || targetVelocity === 0 ? 'FIXED POSITION (STOPPED)' : 'HOLD POSITION (STOP TARGET)'}</span>
+          </button>
+        </div>
+
         <select
           value={trajectoryPreset}
           onChange={(e) => setTrajectoryPreset(e.target.value)}
           className="w-full bg-slate-950 border border-slate-700 text-cyan-400 text-xs font-mono rounded-md px-3 py-2 outline-none cursor-pointer hover:border-amber-500 transition-all font-bold"
         >
+          <option value="STATIONARY_HOVER">Stationary / Hover Mode (Fixed Target Position)</option>
           <option value="SINUSOIDAL">Sinusoidal Path</option>
           <option value="LINEAR_FLYBY">Linear High-Speed Flyby</option>
           <option value="FIGURE_8">Figure-8 Lissajous Curve</option>

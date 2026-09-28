@@ -99,17 +99,32 @@ function ObserverCameraControl({ focusTarget, beaconPos, orbitControlsRef }) {
 /**
  * High-Detail Orbital Satellite Model
  */
-function OrbitalSatelliteTarget({ trajectoryPreset = 'SINUSOIDAL', beaconRef, onPosUpdate, dropLOS = false, showTrail = true }) {
+function OrbitalSatelliteTarget({
+  trajectoryPreset = 'SINUSOIDAL',
+  beaconRef,
+  onPosUpdate,
+  dropLOS = false,
+  showTrail = true,
+  targetVelocity = 1.0
+}) {
   const groupRef = useRef();
   const satelliteBusRef = useRef();
   const trailPointsRef = useRef([]);
+  const simTimeRef = useRef(0);
   const [trailPath, setTrailPath] = useState([]);
 
-  useFrame(({ clock }) => {
-    const t = clock.getElapsedTime();
+  useFrame((_, delta) => {
+    // Dynamically scale motion time with targetVelocity slider
+    simTimeRef.current += delta * targetVelocity;
+    const t = simTimeRef.current;
+
     let x = 0, y = 3, z = -20;
 
-    if (trajectoryPreset === 'LINEAR_FLYBY') {
+    if (trajectoryPreset === 'STATIONARY_HOVER') {
+      x = 0;
+      y = 3;
+      z = -20;
+    } else if (trajectoryPreset === 'LINEAR_FLYBY') {
       x = ((t * 4) % 30) - 15;
       y = 4 + Math.sin(t * 0.5) * 1.5;
       z = -20 + Math.cos(t * 0.3) * 3;
@@ -148,7 +163,7 @@ function OrbitalSatelliteTarget({ trajectoryPreset = 'SINUSOIDAL', beaconRef, on
       if (trailPointsRef.current.length > 80) {
         trailPointsRef.current.shift();
       }
-      if (clock.getElapsedTime() % 0.1 < 0.033) {
+      if (t % 0.1 < 0.033) {
         setTrailPath([...trailPointsRef.current]);
       }
     }
@@ -573,6 +588,7 @@ export default function DualViewportScene({
   turbulenceIntensity = 0,
   dropLOS = false,
   trajectoryPreset = 'SINUSOIDAL',
+  targetVelocity = 1.0,
   isLocked = false,
   trackingState = 'SEARCHING',
   binaryFrameB64 = null,
@@ -699,6 +715,7 @@ export default function DualViewportScene({
               onPosUpdate={(pos) => setBeaconPos(pos)}
               dropLOS={dropLOS}
               showTrail={showPIP}
+              targetVelocity={targetVelocity}
             />
 
             <OpticalLaserBeam isLocked={isLocked} beaconPos={beaconPos} />
@@ -776,7 +793,7 @@ export default function DualViewportScene({
               onPixelErrorUpdate={onPixelErrorUpdate}
             />
 
-            <OrbitalSatelliteTarget trajectoryPreset={trajectoryPreset} beaconRef={beaconRef} dropLOS={dropLOS} showTrail={showPIP} />
+            <OrbitalSatelliteTarget trajectoryPreset={trajectoryPreset} beaconRef={beaconRef} dropLOS={dropLOS} showTrail={showPIP} targetVelocity={targetVelocity} />
             <EnvironmentalDisturbances turbulenceIntensity={turbulenceIntensity} dropLOS={dropLOS} />
           </Canvas>
 
