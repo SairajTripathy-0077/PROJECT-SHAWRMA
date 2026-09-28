@@ -17,6 +17,7 @@ export default function App() {
     targetVelocity,
     zoomFov, 
     sensorMode, 
+    gimbalMaxVel,
     jitterAmp, 
     jitterFreq, 
     turbulence, 
@@ -111,18 +112,18 @@ export default function App() {
     return () => {
       videoBridge.disconnect();
     };
-  }, [isTrackingActive, isPaused, pan, tilt, setTrackingState]);
+  }, [isTrackingActive, isPaused, pan, tilt, gimbalMaxVel, setTrackingState]);
 
   // Main 30 FPS Frame Transmission Loop
   useEffect(() => {
     const frameInterval = setInterval(() => {
       if (canvasRef.current && !isPaused) {
-        videoBridge.sendFrame(canvasRef.current, pixelErrorRef.current, dropLOS, pidGains);
+        videoBridge.sendFrame(canvasRef.current, pixelErrorRef.current, dropLOS, { ...pidGains, max_vel: gimbalMaxVel });
       }
     }, 33);
 
     return () => clearInterval(frameInterval);
-  }, [dropLOS, pidGains, isPaused]);
+  }, [dropLOS, pidGains, gimbalMaxVel, isPaused]);
 
   const handlePixelErrorUpdate = (errObj) => {
     pixelErrorRef.current = { x: errObj.x, y: errObj.y };
@@ -170,6 +171,7 @@ export default function App() {
             pan={pan}
             tilt={tilt}
             zoomFov={zoomFov}
+            sensorMode={sensorMode}
             jitterAmp={jitterAmp}
             jitterFreq={jitterFreq}
             turbulenceIntensity={turbulence}

@@ -1,0 +1,37 @@
+{
+  "name": "fsoc-pat-simulator",
+  "version": "0.1.0",
+  "description": "Free-Space Optical Communications (FSOC) Pointing, Acquisition, and Tracking (PAT) Simulator with OpenCV Computer Vision & Kalman Filtering",
+  "stack": {
+    "frontend": "React 18 + React Three Fiber + Vite + Tailwind CSS + Lucide React + Recharts",
+    "desktop": "Tauri v2 (Rust)",
+    "vision_backend": "Python 3.x + OpenCV 5.x + NumPy (Kalman Filter 2D + Dual-Axis PID)",
+    "transport": "Tauri IPC & WebSocket Video Bridge"
+  },
+  "domains": [
+    {
+      "id": "simulation",
+      "name": "3D Kinematics & Optical Simulation",
+      "owns": ["src/components/SimulationCanvas.jsx", "src/components/Scene.jsx"]
+    },
+    {
+      "id": "vision_tracking",
+      "name": "Computer Vision & Kalman Filter Tracking",
+      "owns": ["tracker.py", "backend/tracker.py", "backend/cv_pipeline.py", "backend/test_cv_tracker.py"]
+    },
+    {
+      "id": "telemetry_hud",
+      "name": "Telemetry HUD & User Interface",
+      "owns": ["src/components/TelemetryOverlay.jsx", "src/components/TelemetryDashboard.jsx", "src/App.jsx"]
+    },
+    {
+      "id": "ipc_bridge",
+      "name": "Video Bridge & IPC Transport",
+      "owns": ["src/services/videoBridge.js", "src-tauri/src/"]
+    }
+  ],
+  "governance": {
+    "graphs": "governance/graphs/",
+    "memory": ".agents/memory/"
+  }
+}

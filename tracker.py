@@ -1,305 +1,433 @@
+"""
+FSOC PAT State-Anchored Multi-Target Optical Tracker & Estimator Engine
+Aerospace-Grade Architecture Featuring:
+- MultiTracker with N=2 Tracks (Sat 1 Primary & Sat 2 Secondary)
+- Momentum-Aware Data Association (Mahalanobis Distance + Velocity Alignment Cost)
+- Chi-Square (9.21) Innovation Gating against False Associations / ID Swapping
+- State-Anchored Kalman Filters with Decoupled Forward Latency Projection (+25ms)
+- Asymmetric Dropout & Cloud-Fade Tracking
+- Full Backward Compatibility with Single-Target AutonomousPATTrackingEngine & Stdio Streams
+"""
+
 import sys
 import json
 import base64
 import time
 import math
+from typing import Tuple, Optional, Dict, Any, List
 import numpy as np
 
 try:
-    import cv2
-    HAS_OPENCV = True
+    from backend.cv_pipeline import DynamicPerimeterTCoGTracker, VisionTracker, HAS_OPENCV
+    from backend.controller import FeedforwardBackcalcPIDController, VirtualSetpointController, DEFAULT_CONTROLLER_CONFIG
 except ImportError:
-    HAS_OPENCV = False
+    try:
+        from cv_pipeline import DynamicPerimeterTCoGTracker, VisionTracker, HAS_OPENCV
+        from controller import FeedforwardBackcalcPIDController, VirtualSetpointController, DEFAULT_CONTROLLER_CONFIG
+    except ImportError:
+        HAS_OPENCV = False
+        DEFAULT_CONTROLLER_CONFIG = {}
+
+if HAS_OPENCV:
+    import cv2
 
 
-class ArchimedeanSpiralSearch:
+class StateAnchoredKalmanFilter2D:
     """
-    Executes an Archimedean Spiral Search Pattern r(theta) = a + b * theta
-    when target optical beacon is outside the camera FOV.
+    2D Constant Velocity Kalman Filter anchored to true measurement time,
+    with Extrapolated Forward Projection for Latency Compensation.
+    
+    State Vector: x = [pos_x, pos_y, vel_x, vel_y]^T
+    where velocities are in pixels/second.
     """
-    def __init__(self, a=0.0, b=0.8, angular_speed=2.5, max_radius=35.0):
-        self.a = a
-        self.b = b
-        self.angular_speed = angular_speed
-        self.max_radius = max_radius
-        self.theta = 0.0
+    def __init__(
+        self,
+        dt_default: float = 0.033,
+        latency_lag_s: float = 0.025,
+        q_pos: float = 0.05,
+        q_vel: float = 10.0,
+        r_var: float = 1.0,
+        maneuver_threshold_px: float = 5.0,
+        maneuver_q_scale: float = 5.0,
+        max_covariance_trace: float = 1000.0
+    ):
+        self.dt_default = dt_default
+        self.latency_lag_s = latency_lag_s
+        self.q_pos_base = q_pos
+        self.q_vel_base = q_vel
+        self.r_var = r_var
+        self.maneuver_threshold_px = maneuver_threshold_px
+        self.maneuver_q_scale = maneuver_q_scale
+        self.max_covariance_trace = max_covariance_trace
 
-    def step(self, dt=0.033):
-        self.theta += self.angular_speed * dt
-        r = self.a + self.b * self.theta
-
-        if r > self.max_radius:
-            self.theta = 0.0
-            r = 0.0
-
-        pan_search = r * math.cos(self.theta)
-        tilt_search = r * math.sin(self.theta)
-        return pan_search, tilt_search
-
-    def reset(self):
-        self.theta = 0.0
-
-
-class EKFConstantAcceleration:
-    """
-    Extended Kalman Filter with Constant Acceleration Motion Model [x, y, vx, vy, ax, ay]
-    Drives predictive hold during line-of-sight (LOS) occlusion up to 3.0s.
-    """
-    def __init__(self, dt=0.033):
-        self.dt = dt
-        self.x = np.zeros((6, 1), dtype=np.float32)
-
-        dt2 = 0.5 * dt * dt
-        self.F = np.array([
-            [1, 0, dt, 0, dt2, 0],
-            [0, 1, 0, dt, 0, dt2],
-            [0, 0, 1, 0,  dt, 0],
-            [0, 0, 0, 1,  0, dt],
-            [0, 0, 0, 0,  1, 0],
-            [0, 0, 0, 0,  0, 1]
-        ], dtype=np.float32)
-
+        self.x = np.zeros((4, 1), dtype=np.float32)
         self.H = np.array([
-            [1, 0, 0, 0, 0, 0],
-            [0, 1, 0, 0, 0, 0]
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0]
         ], dtype=np.float32)
 
-        self.Q = np.eye(6, dtype=np.float32) * 0.05
-        self.R = np.eye(2, dtype=np.float32) * 1.5
-        self.P = np.eye(6, dtype=np.float32) * 10.0
-        self.occlusion_timer = 0.0
+        self.R = np.eye(2, dtype=np.float32) * self.r_var
+        self.P = np.diag([5.0, 5.0, 200.0, 200.0]).astype(np.float32)
+
+        self.frames_lost = 0
         self.initialized = False
+        self.last_innovation_mag = 0.0
+        self.last_meas: Optional[Tuple[float, float]] = None
 
-    def predict(self, dt=0.033):
-        dt2 = 0.5 * dt * dt
-        self.F[0, 2] = dt
-        self.F[1, 3] = dt
-        self.F[0, 4] = dt2
-        self.F[1, 5] = dt2
-        self.F[2, 4] = dt
-        self.F[3, 5] = dt
+    def _build_transition_matrix(self, dt: float) -> np.ndarray:
+        return np.array([
+            [1.0, 0.0, dt,  0.0],
+            [0.0, 1.0, 0.0, dt ],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0]
+        ], dtype=np.float32)
 
-        self.x = np.dot(self.F, self.x)
-        self.P = np.dot(np.dot(self.F, self.P), self.F.T) + self.Q
+    def _build_q_matrix(self, dt: float, q_scale: float = 1.0) -> np.ndarray:
+        dt2 = (dt ** 2) / 2.0
+        q_p = self.q_pos_base
+        q_v = self.q_vel_base * q_scale
+        return np.array([
+            [dt2 * dt2 * q_p, 0.0,             dt2 * dt * q_p, 0.0           ],
+            [0.0,             dt2 * dt2 * q_p, 0.0,            dt2 * dt * q_p],
+            [dt2 * dt * q_p,  0.0,             dt * dt * q_v,  0.0           ],
+            [0.0,             dt2 * dt * q_p,  0.0,            dt * dt * q_v ]
+        ], dtype=np.float32)
+
+    def predict(self, dt: Optional[float] = None) -> Tuple[float, float]:
+        step_dt = min(dt if dt is not None and dt > 0 else self.dt_default, 0.1)
+        F = self._build_transition_matrix(step_dt)
+        Q = self._build_q_matrix(step_dt)
+
+        self.x = np.dot(F, self.x)
+        self.P = np.dot(np.dot(F, self.P), F.T) + Q
+        self.P = (self.P + self.P.T) * 0.5
+
+        tr = np.trace(self.P)
+        if tr > self.max_covariance_trace:
+            self.P *= (self.max_covariance_trace / tr)
+
         return float(self.x[0, 0]), float(self.x[1, 0])
 
-    def update(self, z_x, z_y):
+    def compute_mahalanobis_distance(self, z_x: float, z_y: float) -> Tuple[float, np.ndarray]:
+        """Computes Mahalanobis distance of candidate measurement from predicted track state."""
+        z = np.array([[z_x], [z_y]], dtype=np.float32)
+        y = z - np.dot(self.H, self.x)
+        S = np.dot(np.dot(self.H, self.P), self.H.T) + self.R
+        try:
+            S_inv = np.linalg.inv(S)
+            d_sq = float(np.dot(np.dot(y.T, S_inv), y)[0, 0])
+            d_mahal = math.sqrt(max(0.0, d_sq))
+        except np.linalg.LinAlgError:
+            d_mahal = float(np.hypot(y[0, 0], y[1, 0]))
+        return d_mahal, y
+
+    def update(self, z_x: float, z_y: float, dt: Optional[float] = None) -> Tuple[float, float, float, float]:
+        step_dt = min(dt if dt is not None and dt > 0 else self.dt_default, 0.1)
+
         if not self.initialized:
             self.x[0, 0] = z_x
             self.x[1, 0] = z_y
+            self.x[2, 0] = 0.0
+            self.x[3, 0] = 0.0
             self.initialized = True
-            self.occlusion_timer = 0.0
-            return z_x, z_y
+            self.frames_lost = 0
+            self.last_meas = (z_x, z_y)
+            return float(z_x), float(z_y), 0.0, 0.0
 
         z = np.array([[z_x], [z_y]], dtype=np.float32)
         y = z - np.dot(self.H, self.x)
+        innovation_mag = float(np.hypot(y[0, 0], y[1, 0]))
+        self.last_innovation_mag = innovation_mag
+
+        if innovation_mag > self.maneuver_threshold_px:
+            scale = min(self.maneuver_q_scale * (innovation_mag / self.maneuver_threshold_px), 20.0)
+            self.P += self._build_q_matrix(step_dt, q_scale=scale)
+
         S = np.dot(np.dot(self.H, self.P), self.H.T) + self.R
         K = np.dot(np.dot(self.P, self.H.T), np.linalg.inv(S))
 
         self.x = self.x + np.dot(K, y)
-        I = np.eye(6, dtype=np.float32)
+        I = np.eye(4, dtype=np.float32)
         self.P = np.dot((I - np.dot(K, self.H)), self.P)
-        self.occlusion_timer = 0.0
+        self.P = (self.P + self.P.T) * 0.5
+        self.frames_lost = 0
+        self.last_meas = (z_x, z_y)
 
-        return float(self.x[0, 0]), float(self.x[1, 0])
+        return float(self.x[0, 0]), float(self.x[1, 0]), float(self.x[2, 0]), float(self.x[3, 0])
+
+    def get_forward_projection(self, lag_s: Optional[float] = None) -> Tuple[float, float]:
+        dt_lag = lag_s if lag_s is not None else self.latency_lag_s
+        proj_x = float(self.x[0, 0] + self.x[2, 0] * dt_lag)
+        proj_y = float(self.x[1, 0] + self.x[3, 0] * dt_lag)
+        return proj_x, proj_y
+
+    def get_state(self) -> Tuple[float, float, float, float]:
+        """Returns current state vector (x, y, vx, vy)."""
+        return float(self.x[0, 0]), float(self.x[1, 0]), float(self.x[2, 0]), float(self.x[3, 0])
+
+    def coast(self, dt: Optional[float] = None) -> Tuple[float, float, float, float]:
+        self.frames_lost += 1
+        pos_x, pos_y = self.predict(dt=dt)
+        return pos_x, pos_y, float(self.x[2, 0]), float(self.x[3, 0])
+
+    def reset(self) -> None:
+        self.x = np.zeros((4, 1), dtype=np.float32)
+        self.P = np.diag([5.0, 5.0, 200.0, 200.0]).astype(np.float32)
+        self.frames_lost = 0
+        self.initialized = False
+        self.last_innovation_mag = 0.0
+        self.last_meas = None
 
 
-class ConfigurableDualAxisPID:
+class MultiTracker:
     """
-    Production Dual-Axis PID Controller with Anti-Windup Clamping and Dynamic Gain Updates
+    Multi-Target State Estimator (N=2) with Momentum-Aware Data Association.
+    Prevents ID swapping during path crossing/merges using Kinematic Momentum Consistency.
     """
     def __init__(self, kp_pan=0.15, ki_pan=0.005, kd_pan=0.04, kp_tilt=0.15, ki_tilt=0.005, kd_tilt=0.04, max_vel=50.0):
         self.kp_pan = kp_pan
         self.ki_pan = ki_pan
         self.kd_pan = kd_pan
 
-        self.kp_tilt = kp_tilt
-        self.ki_tilt = ki_tilt
-        self.kd_tilt = kd_tilt
+            self.track_statuses[i] = status
+            proj_x, proj_y = kf.get_forward_projection()
 
-        self.max_vel = max_vel
-        self.integral_x = 0.0
-        self.integral_y = 0.0
-        self.prev_e_x = 0.0
-        self.prev_e_y = 0.0
+            track_outputs.append({
+                "id": i,
+                "name": self.track_names[i],
+                "status": status,
+                "estimated_pos": [round(est_x, 2), round(est_y, 2)],
+                "projected_pos": [round(proj_x, 2), round(proj_y, 2)],
+                "velocity": [round(vx, 2), round(vy, 2)],
+                "frames_lost": kf.frames_lost,
+                "active": status in ["TRACKING", "COASTING"]
+            })
 
-    def set_gains(self, gains):
-        self.kp_pan = gains.get('kp_pan', self.kp_pan)
-        self.ki_pan = gains.get('ki_pan', self.ki_pan)
-        self.kd_pan = gains.get('kd_pan', self.kd_pan)
-        self.kp_tilt = gains.get('kp_tilt', self.kp_tilt)
-        self.ki_tilt = gains.get('ki_tilt', self.ki_tilt)
-        self.kd_tilt = gains.get('kd_tilt', self.kd_tilt)
-
-    def compute(self, e_x, e_y, dt=0.033):
-        self.integral_x = np.clip(self.integral_x + e_x * dt, -50.0, 50.0)
-        self.integral_y = np.clip(self.integral_y + e_y * dt, -50.0, 50.0)
-
-        deriv_x = (e_x - self.prev_e_x) / dt if dt > 0 else 0.0
-        deriv_y = (e_y - self.prev_e_y) / dt if dt > 0 else 0.0
-
-        u_pan = (self.kp_pan * e_x) + (self.ki_pan * self.integral_x) + (self.kd_pan * deriv_x)
-        u_tilt = -(self.kp_tilt * e_y + self.ki_tilt * self.integral_y + self.kd_tilt * deriv_y)
-
-        u_pan = np.clip(u_pan, -self.max_vel, self.max_vel)
-        u_tilt = np.clip(u_tilt, -self.max_vel, self.max_vel)
-
-        self.prev_e_x = e_x
-        self.prev_e_y = e_y
-
-        return float(u_pan), float(u_tilt)
+        return track_outputs
 
 
-class AutonomousTrackingFSM:
+# Backward compatibility aliases
+LatencyCompensatedKalmanFilter2D = StateAnchoredKalmanFilter2D
+KalmanFilter2D = StateAnchoredKalmanFilter2D
+
+
+class AutonomousPATTrackingEngine:
     """
-    4-State Finite State Machine: SEARCHING -> ACQUIRE -> TRACKING -> PREDICTIVE_HOLD
+    Complete FSOC PAT Vision, Estimation, and Control Core Engine.
+    Supports Dual-Target and Single-Target Modes seamlessly.
     """
-    def __init__(self):
-        self.state = "SEARCHING"
-        self.acquire_counter = 0
-        self.occlusion_timer = 0.0
-        self.spiral = ArchimedeanSpiralSearch()
-        self.ekf = EKFConstantAcceleration()
-        self.pid = ConfigurableDualAxisPID()
+    def __init__(self, cfg: Optional[Dict[str, Any]] = None):
+        self.cfg = cfg or {
+            "latency_ms": 25.0,
+            "kp": 7.5,
+            "ki": 1.5,
+            "kd": 0.1,
+            "k_ff": 1.0,
+            "k_aw": 0.6,
+            "max_vel": 180.0,
+            "a_max": 3500.0,
+            "integral_limit": 50.0,
+            "boresight_x": 320.0,
+            "boresight_y": 240.0,
+            "control_mode": "PRIMARY_ONLY"  # "PRIMARY_ONLY" | "BARYCENTER"
+        }
 
-    def update(self, detected_centroid, input_err_x, input_err_y, drop_los=False, dt=0.033):
-        width, height = 640, 480
-        center_x, center_y = width / 2.0, height / 2.0
+        self.vision = VisionTracker()
+        self.multi_tracker = MultiTracker(
+            num_tracks=2,
+            dt_default=0.033,
+            latency_lag_s=self.cfg.get("latency_ms", 25.0) / 1000.0
+        )
+        self.controller = VirtualSetpointController(
+            kp=self.cfg.get("kp", 7.5),
+            ki=self.cfg.get("ki", 1.5),
+            kd=self.cfg.get("kd", 0.1),
+            k_ff=self.cfg.get("k_ff", 1.0),
+            k_aw=self.cfg.get("k_aw", 0.6),
+            max_vel=self.cfg.get("max_vel", 180.0),
+            a_max=self.cfg.get("a_max", 3500.0),
+            integral_limit=self.cfg.get("integral_limit", 50.0),
+            mode=self.cfg.get("control_mode", "PRIMARY_ONLY")
+        )
 
-        raw_x = None
-        raw_y = None
+        # Single tracker backward-compatible pointer
+        self.kalman = self.multi_tracker.tracks[0]
+        self.last_timestamp = None
 
-        if not drop_los and detected_centroid is not None:
-            raw_x, raw_y = detected_centroid
-        elif not drop_los and input_err_x is not None and input_err_y is not None:
-            raw_x = center_x + input_err_x
-            raw_y = center_y + input_err_y
+    def process_frame(
+        self,
+        frame_b64: str = "",
+        input_err_x: Optional[float] = None,
+        input_err_y: Optional[float] = None,
+        timestamp_s: Optional[float] = None,
+        control_mode: Optional[str] = None
+    ) -> Dict[str, Any]:
+        now = time.time() if timestamp_s is None else timestamp_s
+        if self.last_timestamp is None:
+            dt = 0.033
+        else:
+            dt = max(min(now - self.last_timestamp, 0.1), 0.001)
+        self.last_timestamp = now
 
-        if self.state == "SEARCHING":
-            if raw_x is not None and raw_y is not None:
-                self.state = "ACQUIRE"
-                self.acquire_counter = 1
-                est_x, est_y = self.ekf.update(raw_x, raw_y)
-                e_x, e_y = est_x - center_x, est_y - center_y
-                pan_v, tilt_v = self.pid.compute(e_x, e_y, dt)
-            else:
-                pan_v, tilt_v = self.spiral.step(dt)
-                e_x, e_y = 0.0, 0.0
-                est_x, est_y = center_x, center_y
+        if control_mode:
+            self.controller.set_mode(control_mode)
 
-        elif self.state == "ACQUIRE":
-            if raw_x is not None and raw_y is not None:
-                self.acquire_counter += 1
-                est_x, est_y = self.ekf.update(raw_x, raw_y)
-                e_x, e_y = est_x - center_x, est_y - center_y
-                pan_v, tilt_v = self.pid.compute(e_x, e_y, dt)
+        # 1. Forward Predictions for ROI Windows
+        self.multi_tracker.predict_all(dt=dt)
+        predicted_centers = self.multi_tracker.get_projections_all()
 
-                if self.acquire_counter >= 3:
-                    self.state = "TRACKING"
-            else:
-                self.state = "SEARCHING"
-                pan_v, tilt_v = self.spiral.step(dt)
-                e_x, e_y = 0.0, 0.0
-                est_x, est_y = center_x, center_y
+        # 2. Multi-Target Optical Extraction (Soft-Masked TCoG)
+        frame_np = self.vision.decode_b64(frame_b64) if frame_b64 else None
+        measurements, fsm_state, cv_latency_ms = self.vision.process_multi_targets(
+            frame_np, predicted_centers
+        )
 
-        elif self.state == "TRACKING":
-            if raw_x is not None and raw_y is not None:
-                est_x, est_y = self.ekf.update(raw_x, raw_y)
-                e_x, e_y = est_x - center_x, est_y - center_y
-                pan_v, tilt_v = self.pid.compute(e_x, e_y, dt)
-                self.occlusion_timer = 0.0
-            else:
-                self.state = "PREDICTIVE_HOLD"
-                self.occlusion_timer = 0.0
-                est_x, est_y = self.ekf.predict(dt)
-                e_x, e_y = est_x - center_x, est_y - center_y
-                pan_v, tilt_v = self.pid.compute(e_x, e_y, dt)
+        # Single target coordinate overrides from IPC fallback
+        if input_err_x is not None and input_err_y is not None:
+            raw_x = self.cfg["boresight_x"] + float(input_err_x)
+            raw_y = self.cfg["boresight_y"] + float(input_err_y)
+            measurements = [(raw_x, raw_y), None]
 
-        elif self.state == "PREDICTIVE_HOLD":
-            self.occlusion_timer += dt
-            if raw_x is not None and raw_y is not None and not drop_los:
-                self.state = "TRACKING"
-                est_x, est_y = self.ekf.update(raw_x, raw_y)
-                e_x, e_y = est_x - center_x, est_y - center_y
-                pan_v, tilt_v = self.pid.compute(e_x, e_y, dt)
-            elif self.occlusion_timer <= 3.0:
-                est_x, est_y = self.ekf.predict(dt)
-                e_x, e_y = est_x - center_x, est_y - center_y
-                pan_v, tilt_v = self.pid.compute(e_x, e_y, dt)
-            else:
-                self.state = "SEARCHING"
-                self.spiral.reset()
-                pan_v, tilt_v = self.spiral.step(dt)
-                e_x, e_y = 0.0, 0.0
-                est_x, est_y = center_x, center_y
+        # 3. Momentum-Aware Data Association & Estimation
+        tracks_data = self.multi_tracker.update_with_measurements(measurements, dt=dt)
 
-        is_locked = self.state == "TRACKING" and abs(e_x) < 15.0 and abs(e_y) < 15.0
+        # 4. Virtual Setpoint Calculation & Gimbal Control
+        sat1_proj = tracks_data[0]["projected_pos"]
+        sat1_vel = tracks_data[0]["velocity"]
+        sat1_fade = tracks_data[0]["frames_lost"]
+
+        sat2_proj = tracks_data[1]["projected_pos"]
+        sat2_vel = tracks_data[1]["velocity"]
+        sat2_fade = tracks_data[1]["frames_lost"]
+
+        pan_vel, tilt_vel, err_x, err_y, vsp_out, telemetry_meta = self.controller.compute_multi_target(
+            sat1_proj=sat1_proj,
+            sat1_vel=sat1_vel,
+            sat1_fade=sat1_fade,
+            sat2_proj=sat2_proj,
+            sat2_vel=sat2_vel,
+            sat2_fade=sat2_fade,
+            boresight_x=self.cfg["boresight_x"],
+            boresight_y=self.cfg["boresight_y"],
+            dt=dt
+        )
+
+        is_locked = (abs(err_x) < 15.0) and (abs(err_y) < 15.0)
+        current_fps = round(1.0 / dt, 1) if dt > 0 else 60.0
+        current_rmse = round(float(np.hypot(err_x, err_y)), 2)
 
         return {
-            "state": self.state,
-            "pan_velocity": round(pan_v, 4),
-            "tilt_velocity": round(tilt_v, 4),
-            "error_px": [round(e_x, 2), round(e_y, 2)],
-            "predicted_px": [round(est_x - center_x, 2), round(est_y - center_y, 2)],
-            "locked": is_locked
+            "state": telemetry_meta.get("state", fsm_state),
+            "pan_velocity": round(pan_vel, 4),
+            "tilt_velocity": round(tilt_vel, 4),
+            "pan_vel": round(pan_vel, 4),
+            "tilt_vel": round(tilt_vel, 4),
+            "error_px": [round(err_x, 2), round(err_y, 2)],
+            "predicted_px": [round(vsp_out[0] - self.cfg["boresight_x"], 2), round(vsp_out[1] - self.cfg["boresight_y"], 2)],
+            "locked": bool(is_locked),
+            "rmse": current_rmse,
+            "fps": current_fps,
+            "cv_latency_ms": round(cv_latency_ms, 2),
+            "targets": tracks_data,
+            "vsp": [round(vsp_out[0], 2), round(vsp_out[1], 2)],
+            "divergence_warning": telemetry_meta.get("divergence_warning", False),
+            "mode": telemetry_meta.get("active_mode", self.controller.current_mode)
         }
 
 
-def extract_centroid_and_binary_preview(frame_b64, threshold_val=180, blur_kernel=5, morph_iter=2, width=640, height=480):
-    if not HAS_OPENCV or not frame_b64:
-        return None, None, None
+class AutonomousTrackingFSM:
+    """Backward-compatible FSM wrapper around AutonomousPATTrackingEngine for legacy servers."""
+    def __init__(self):
+        self.engine = AutonomousPATTrackingEngine()
+        self.pid = self.engine.controller
 
+    def update(
+        self,
+        centroid: Optional[Tuple[float, float]] = None,
+        input_err_x: Optional[float] = None,
+        input_err_y: Optional[float] = None,
+        drop_los: bool = False,
+        dt: float = 0.033
+    ) -> Dict[str, Any]:
+        if drop_los:
+            est_x, est_y, vx, vy = self.engine.kalman.coast(dt=dt)
+            x_proj, y_proj = self.engine.kalman.get_forward_projection()
+            pan_vel, tilt_vel, err_x, err_y = self.engine.controller.compute(
+                x_proj, y_proj, vx, vy, dt=dt
+            )
+            return {
+                "state": "PREDICTIVE_HOLD",
+                "pan_velocity": round(pan_vel, 4),
+                "tilt_velocity": round(tilt_vel, 4),
+                "error_px": [round(err_x, 2), round(err_y, 2)],
+                "predicted_px": [round(x_proj - self.engine.cfg["boresight_x"], 2), round(y_proj - self.engine.cfg["boresight_y"], 2)],
+                "locked": False
+            }
+
+        if centroid is not None:
+            raw_x, raw_y = centroid
+            self.engine.kalman.predict(dt=dt)
+            est_x, est_y, vx, vy = self.engine.kalman.update(raw_x, raw_y, dt=dt)
+            state = "TRACKING"
+        elif input_err_x is not None and input_err_y is not None:
+            raw_x = self.engine.cfg["boresight_x"] + float(input_err_x)
+            raw_y = self.engine.cfg["boresight_y"] + float(input_err_y)
+            self.engine.kalman.predict(dt=dt)
+            est_x, est_y, vx, vy = self.engine.kalman.update(raw_x, raw_y, dt=dt)
+            state = "TRACKING"
+        else:
+            est_x, est_y, vx, vy = self.engine.kalman.coast(dt=dt)
+            state = "SEARCHING"
+
+        x_proj, y_proj = self.engine.kalman.get_forward_projection()
+        pan_vel, tilt_vel, err_x, err_y = self.engine.controller.compute(
+            x_proj, y_proj, vx, vy, dt=dt
+        )
+        is_locked = (abs(err_x) < 15.0) and (abs(err_y) < 15.0)
+
+        return {
+            "state": state,
+            "pan_velocity": round(pan_vel, 4),
+            "tilt_velocity": round(tilt_vel, 4),
+            "error_px": [round(err_x, 2), round(err_y, 2)],
+            "predicted_px": [round(x_proj - self.engine.cfg["boresight_x"], 2), round(y_proj - self.engine.cfg["boresight_y"], 2)],
+            "locked": bool(is_locked)
+        }
+
+
+def extract_centroid_and_binary_preview(frame_b64: str) -> Tuple[Optional[Tuple[float, float]], Optional[str]]:
+    """Backward compatible centroid & binary preview extractor for legacy servers."""
+    if not HAS_OPENCV or not frame_b64:
+        return None, None
     try:
+        if "," in frame_b64:
+            frame_b64 = frame_b64.split(",", 1)[1]
         img_bytes = base64.b64decode(frame_b64)
         nparr = np.frombuffer(img_bytes, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
         if frame is None:
-            return None, None, None
-
+            return None, None
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        tracker = DynamicPerimeterTCoGTracker()
+        centroid, status, meta = tracker.extract_centroid_tcog(gray, 320.0, 240.0)
         
-        # Ensure blur kernel is odd
-        k_size = int(blur_kernel)
-        if k_size % 2 == 0:
-            k_size += 1
-        k_size = max(1, k_size)
-
-        blurred = cv2.GaussianBlur(gray, (k_size, k_size), 0)
-        thresh_val = int(np.clip(threshold_val, 10, 255))
-        _, thresh = cv2.threshold(blurred, thresh_val, 255, cv2.THRESH_BINARY)
-
-        # Apply morphological operations
-        if morph_iter > 0:
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-            thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=int(morph_iter))
-
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        centroid = None
-        bbox = None
-
-        if contours:
-            c = max(contours, key=cv2.contourArea)
-            M = cv2.moments(c)
-            if M["m00"] != 0:
-                cx = int(M["m10"] / M["m00"])
-                cy = int(M["m01"] / M["m00"])
-                centroid = (cx, cy)
-                x, y, w, h = cv2.boundingRect(c)
-                bbox = [int(x), int(y), int(w), int(h)]
-
-        _, buffer = cv2.imencode('.jpg', thresh)
-        binary_b64 = base64.b64encode(buffer).decode('utf-8')
-
-        return centroid, binary_b64, bbox
+        threshold = int(meta.get("threshold", 200))
+        _, thresh = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
+        _, buf = cv2.imencode(".jpg", thresh)
+        bin_b64 = base64.b64encode(buf).decode("utf-8")
+        return centroid, bin_b64
     except Exception:
         return None, None, None
 
 
 def main():
-    fsm = AutonomousTrackingFSM()
-    last_time = time.time()
-    print(json.dumps({"status": "READY", "message": "FSOC PAT Autonomous 4-State Vision Tracker Ready"}), flush=True)
+    engine = AutonomousPATTrackingEngine()
+    print(json.dumps({
+        "status": "READY",
+        "opencv": HAS_OPENCV,
+        "message": "FSOC PAT Multi-Target State-Anchored TCoG Engine Initialized",
+        "config": engine.cfg
+    }), flush=True)
 
     for line in sys.stdin:
         line = line.strip()
@@ -307,36 +435,20 @@ def main():
             continue
 
         try:
-            start_cv = time.time()
-            dt = max(start_cv - last_time, 0.001)
-            last_time = start_cv
-
             data = json.loads(line)
             frame_b64 = data.get("frame", "")
             input_err_x = data.get("error_x", None)
             input_err_y = data.get("error_y", None)
-            drop_los = data.get("drop_los", False)
-            threshold_val = data.get("binary_threshold", 180)
-            blur_kernel = data.get("blur_kernel", 5)
-            morph_iter = data.get("morph_iter", 2)
+            timestamp_s = data.get("timestamp", None)
+            control_mode = data.get("control_mode", None)
 
-            if "gains" in data:
-                fsm.pid.set_gains(data["gains"])
-
-            centroid, binary_b64, bbox = extract_centroid_and_binary_preview(
-                frame_b64,
-                threshold_val=threshold_val,
-                blur_kernel=blur_kernel,
-                morph_iter=morph_iter
+            res = engine.process_frame(
+                frame_b64=frame_b64,
+                input_err_x=input_err_x,
+                input_err_y=input_err_y,
+                timestamp_s=timestamp_s,
+                control_mode=control_mode
             )
-            res = fsm.update(centroid, input_err_x, input_err_y, drop_los=drop_los, dt=dt)
-            cv_latency = (time.time() - start_cv) * 1000.0
-
-            res["fps"] = round(1.0 / dt, 1) if dt > 0 else 60.0
-            res["cv_latency_ms"] = round(cv_latency, 2)
-            res["binary_frame_b64"] = binary_b64
-            res["bbox"] = bbox
-
             print(json.dumps(res), flush=True)
 
         except Exception as e:
@@ -344,14 +456,18 @@ def main():
                 "state": "SEARCHING",
                 "pan_velocity": 0.0,
                 "tilt_velocity": 0.0,
+                "pan_vel": 0.0,
+                "tilt_vel": 0.0,
                 "error_px": [0.0, 0.0],
                 "predicted_px": [0.0, 0.0],
                 "locked": False,
+                "rmse": 0.0,
                 "fps": 0.0,
                 "cv_latency_ms": 0.0,
                 "error": str(e)
             }
             print(json.dumps(err_resp), flush=True)
+
 
 if __name__ == "__main__":
     main()
