@@ -3,11 +3,13 @@ import { create } from 'zustand';
 // 1. Environment Slice
 const createEnvironmentSlice = (set) => ({
   timeOfDay: 'NIGHT',
-  trajectoryPreset: 'SINUSOIDAL',
-  targetVelocity: 1.0,
+  trajectoryPreset: 'STATIONARY_HOVER',
+  targetVelocity: 0.0,
+  targetManualPos: { x: 0, y: 3, z: -20 },
   setTimeOfDay: (timeOfDay) => set({ timeOfDay }),
   setTrajectoryPreset: (trajectoryPreset) => set({ trajectoryPreset }),
   setTargetVelocity: (targetVelocity) => set({ targetVelocity }),
+  setTargetManualPos: (targetManualPos) => set({ targetManualPos }),
 });
 
 // 2. Camera Slice
