@@ -1,8 +1,8 @@
 import React, { useRef, useMemo, useState } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Stars, OrbitControls, PerspectiveCamera, Line } from '@react-three/drei';
 import * as THREE from 'three';
-import { Eye, Zap, EyeOff, Radio, Target, Maximize2, Minimize2, Monitor } from 'lucide-react';
+import { Eye, Zap, EyeOff, Radio, Target, Maximize2, Minimize2, Monitor, Move } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 
 /**
@@ -98,56 +98,115 @@ function ObserverCameraControl({ focusTarget, beaconPos, orbitControlsRef }) {
 }
 
 /**
- * High-Detail Orbital Satellite Model
+ * High-Detail Orbital Satellite Model with 3D Drag Capability
  */
 function OrbitalSatelliteTarget({
-  trajectoryPreset = 'SINUSOIDAL',
+  trajectoryPreset = 'STATIONARY_HOVER',
   beaconRef,
   onPosUpdate,
   dropLOS = false,
   showTrail = true,
-  targetVelocity = 1.0,
+  targetVelocity = 0.0,
+  isDraggable = false,
+  orbitControlsRef,
   phaseOffset = 0
 }) {
+  const { targetManualPos, setTargetManualPos } = useAppStore();
   const groupRef = useRef();
   const satelliteBusRef = useRef();
   const trailPointsRef = useRef([]);
   const simTimeRef = useRef(0);
   const [trailPath, setTrailPath] = useState([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+
+  const { camera, raycaster } = useThree();
+  const dragPlaneRef = useRef(new THREE.Plane());
+  const planeIntersectRef = useRef(new THREE.Vector3());
+
+  // Handle Drag Events on Satellite Mesh
+  const handlePointerDown = (e) => {
+    if (!isDraggable) return;
+    e.stopPropagation();
+    setIsDragging(true);
+
+    if (orbitControlsRef && orbitControlsRef.current) {
+      orbitControlsRef.current.enabled = false;
+    }
+
+    const currentPos = groupRef.current
+      ? groupRef.current.position.clone()
+      : new THREE.Vector3(targetManualPos.x, targetManualPos.y, targetManualPos.z);
+    const camDir = camera.getWorldDirection(new THREE.Vector3()).negate();
+    dragPlaneRef.current.setFromNormalAndCoplanarPoint(camDir, currentPos);
+
+    if (e.target.setPointerCapture) {
+      try { e.target.setPointerCapture(e.pointerId); } catch (_) {}
+    }
+  };
+
+  const handlePointerMove = (e) => {
+    if (!isDragging || !isDraggable) return;
+    e.stopPropagation();
+
+    raycaster.setFromCamera(e.pointer, camera);
+    if (raycaster.ray.intersectPlane(dragPlaneRef.current, planeIntersectRef.current)) {
+      setTargetManualPos({
+        x: planeIntersectRef.current.x,
+        y: planeIntersectRef.current.y,
+        z: planeIntersectRef.current.z
+      });
+    }
+  };
+
+  const handlePointerUp = (e) => {
+    if (!isDraggable) return;
+    e.stopPropagation();
+    setIsDragging(false);
+
+    if (orbitControlsRef && orbitControlsRef.current) {
+      orbitControlsRef.current.enabled = true;
+    }
+
+    if (e.target.releasePointerCapture) {
+      try { e.target.releasePointerCapture(e.pointerId); } catch (_) {}
+    }
+  };
 
   useFrame((_, delta) => {
-    // Dynamically scale motion time with targetVelocity slider
     simTimeRef.current += delta * targetVelocity;
     const t = simTimeRef.current + phaseOffset;
 
-    let x = 0, y = 3, z = -20;
+    let x = targetManualPos.x;
+    let y = targetManualPos.y;
+    let z = targetManualPos.z;
 
     if (trajectoryPreset === 'STATIONARY_HOVER') {
-      x = 0;
-      y = 3;
-      z = -20;
+      x = targetManualPos.x;
+      y = targetManualPos.y;
+      z = targetManualPos.z;
     } else if (trajectoryPreset === 'LINEAR_FLYBY') {
-      x = ((t * 4) % 30) - 15;
-      y = 4 + Math.sin(t * 0.5) * 1.5;
-      z = -20 + Math.cos(t * 0.3) * 3;
+      x = targetManualPos.x + (((t * 4) % 30) - 15);
+      y = targetManualPos.y + Math.sin(t * 0.5) * 1.5;
+      z = targetManualPos.z + Math.cos(t * 0.3) * 3;
     } else if (trajectoryPreset === 'FIGURE_8') {
-      x = Math.sin(t * 0.8) * 8;
-      y = Math.sin(t * 1.6) * 3 + 4;
-      z = -20 + Math.cos(t * 0.8) * 5;
+      x = targetManualPos.x + Math.sin(t * 0.8) * 8;
+      y = targetManualPos.y + Math.sin(t * 1.6) * 3;
+      z = targetManualPos.z + Math.cos(t * 0.8) * 5;
     } else if (trajectoryPreset === 'HIGH_G_EVASIVE') {
-      x = Math.sin(t * 1.5) * 6 + Math.cos(t * 3.5) * 2;
-      y = Math.cos(t * 1.2) * 3 + 4 + Math.sin(t * 4.0) * 1.5;
-      z = -20 + Math.sin(t * 1.0) * 4;
+      x = targetManualPos.x + Math.sin(t * 1.5) * 6 + Math.cos(t * 3.5) * 2;
+      y = targetManualPos.y + Math.cos(t * 1.2) * 3 + Math.sin(t * 4.0) * 1.5;
+      z = targetManualPos.z + Math.sin(t * 1.0) * 4;
     } else if (trajectoryPreset === 'ERRATIC') {
       const step = Math.floor(t * 0.6);
-      x = Math.sin(t * 1.2) * 5 + Math.sin(step * 88) * 4;
-      y = Math.cos(t * 0.9) * 3 + 3 + Math.cos(step * 66) * 2.5;
-      z = -20 + Math.sin(t * 0.5) * 4;
+      x = targetManualPos.x + Math.sin(t * 1.2) * 5 + Math.sin(step * 88) * 4;
+      y = targetManualPos.y + Math.cos(t * 0.9) * 3 + Math.cos(step * 66) * 2.5;
+      z = targetManualPos.z + Math.sin(t * 0.5) * 4;
     } else {
       // Default Sinusoidal
-      x = Math.sin(t * 0.8) * 6;
-      y = Math.cos(t * 0.5) * 3 + 3;
-      z = -20 + Math.sin(t * 0.4) * 4;
+      x = targetManualPos.x + Math.sin(t * 0.8) * 6;
+      y = targetManualPos.y + Math.cos(t * 0.5) * 3;
+      z = targetManualPos.z + Math.sin(t * 0.4) * 4;
     }
 
     if (groupRef.current) {
@@ -173,12 +232,26 @@ function OrbitalSatelliteTarget({
 
   return (
     <>
-      <group ref={groupRef} position={[0, 3, -20]}>
+      <group
+        ref={groupRef}
+        position={[targetManualPos.x, targetManualPos.y, targetManualPos.z]}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerOver={() => isDraggable && setIsHovered(true)}
+        onPointerOut={() => setIsHovered(false)}
+      >
         <group ref={satelliteBusRef}>
           {/* Main Bus Body */}
           <mesh position={[0, 0, 0]}>
             <boxGeometry args={[1.2, 1.2, 1.6]} />
-            <meshStandardMaterial color="#f59e0b" metalness={0.9} roughness={0.2} emissive="#b45309" emissiveIntensity={0.2} />
+            <meshStandardMaterial
+              color={isDragging ? "#00ffcc" : isHovered ? "#f59e0b" : "#f59e0b"}
+              metalness={0.9}
+              roughness={0.2}
+              emissive={isDragging ? "#00ffcc" : isHovered ? "#f59e0b" : "#b45309"}
+              emissiveIntensity={isDragging ? 1.5 : isHovered ? 0.9 : 0.2}
+            />
           </mesh>
 
           {/* Instrument Bevel Trim */}
@@ -199,7 +272,12 @@ function OrbitalSatelliteTarget({
             </mesh>
             <mesh scale={[1.02, 1.02, 1.02]}>
               <boxGeometry args={[1.8, 0.04, 2.2]} />
-              <meshBasicMaterial color="#38bdf8" wireframe transparent opacity={0.3} />
+              <meshBasicMaterial
+                color={isDragging ? "#00ffcc" : isHovered ? "#f59e0b" : "#38bdf8"}
+                wireframe
+                transparent
+                opacity={isDragging ? 0.8 : isHovered ? 0.6 : 0.3}
+              />
             </mesh>
           </group>
 
@@ -215,7 +293,12 @@ function OrbitalSatelliteTarget({
             </mesh>
             <mesh scale={[1.02, 1.02, 1.02]}>
               <boxGeometry args={[1.8, 0.04, 2.2]} />
-              <meshBasicMaterial color="#38bdf8" wireframe transparent opacity={0.3} />
+              <meshBasicMaterial
+                color={isDragging ? "#00ffcc" : isHovered ? "#f59e0b" : "#38bdf8"}
+                wireframe
+                transparent
+                opacity={isDragging ? 0.8 : isHovered ? 0.6 : 0.3}
+              />
             </mesh>
           </group>
 
@@ -589,8 +672,8 @@ export default function DualViewportScene({
   jitterFreq = 25.0,
   turbulenceIntensity = 0,
   dropLOS = false,
-  trajectoryPreset = 'SINUSOIDAL',
-  targetVelocity = 1.0,
+  trajectoryPreset = 'STATIONARY_HOVER',
+  targetVelocity = 0.0,
   isLocked = false,
   trackingState = 'SEARCHING',
   binaryFrameB64 = null,
@@ -667,7 +750,7 @@ export default function DualViewportScene({
               : 'col-span-7'
           }`}
         >
-          {/* Top-Left Locked Badge Pill (Matching Reference) */}
+          {/* Top-Left Locked Badge Pill & Drag Hint */}
           <div className="absolute top-3 left-3 z-20 flex items-center space-x-2">
             <div className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold flex items-center space-x-1.5 border ${
               isLocked
@@ -676,6 +759,11 @@ export default function DualViewportScene({
             }`}>
               <span className={`w-1.5 h-1.5 rounded-sm ${isLocked ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
               <span>{isLocked ? 'LOCKED' : 'SEARCHING'}</span>
+            </div>
+
+            <div className="px-2 py-1 rounded text-[9px] font-mono font-bold flex items-center space-x-1 border bg-slate-950/80 text-cyan-300 border-slate-700/80">
+              <Move className="w-3 h-3 text-amber-400" />
+              <span>DRAG TARGET IN VIEWPORT</span>
             </div>
           </div>
 
@@ -735,6 +823,8 @@ export default function DualViewportScene({
               dropLOS={dropLOS}
               showTrail={showPIP}
               targetVelocity={targetVelocity}
+              isDraggable={true}
+              orbitControlsRef={orbitControlsRef}
             />
 
             {isDualSatMode && (
