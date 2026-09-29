@@ -122,6 +122,20 @@ class DynamicPerimeterTCoGTracker:
         self.last_tcog_sum = tcog_sum
 
         if tcog_sum <= self.min_signal_sum:
+            # Adaptive Fog / High-Turbulence Peak Extraction Fallback
+            max_val = float(np.max(roi_f32))
+            if max_val > (mu_bg + 1.2 * max(sigma_bg, 0.5)) and max_val > 12.0:
+                y_max, x_max = np.unravel_index(np.argmax(roi_f32), roi_f32.shape)
+                cx_global = float(x_max + x_min)
+                cy_global = float(y_max + y_min)
+                self.dropout_counter = 0
+                return (cx_global, cy_global), "FOG_PENETRATION", {
+                    "mu_bg": mu_bg,
+                    "sigma_bg": sigma_bg,
+                    "threshold": threshold,
+                    "tcog_sum": max_val
+                }
+
             self.dropout_counter += 1
             self.next_roi_size = self.expanded_roi_size
             return None, "DROPOUT", {

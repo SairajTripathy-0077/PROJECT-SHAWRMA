@@ -13,20 +13,20 @@ export default function DetectionPanel() {
 
   return (
     <div
-      className="space-y-3 font-mono text-xs select-auto pointer-events-auto"
+      className="space-y-2 font-mono text-[10px] select-auto pointer-events-auto"
       onMouseDown={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <div className="flex items-center space-x-2 text-emerald-400 font-bold border-b border-slate-800 pb-1.5">
-        <Scan className="w-4 h-4" />
-        <span>03. OPENCV COMPUTER VISION & DETECTION TUNING</span>
+      <div className="flex items-center space-x-1.5 text-emerald-400 font-bold border-b border-slate-800 pb-1">
+        <Scan className="w-3.5 h-3.5" />
+        <span>CV DETECTION</span>
       </div>
 
-      <div className="grid grid-cols-3 gap-2">
-        {/* Binary Threshold Slider */}
-        <div className="bg-slate-900/80 p-2.5 rounded border border-slate-800 space-y-1">
-          <div className="flex justify-between items-center text-[10px] text-slate-400 font-bold">
-            <span>BINARY THRESHOLD</span>
+      <div className="grid grid-cols-3 gap-1.5">
+        {/* Binary Threshold */}
+        <div className="bg-slate-900/80 p-1.5 rounded border border-slate-800 space-y-1">
+          <div className="flex justify-between items-center text-[9px] text-slate-400 font-bold">
+            <span>THRESHOLD</span>
             <span className="text-emerald-400">{binaryThreshold}</span>
           </div>
           <input
@@ -40,10 +40,10 @@ export default function DetectionPanel() {
           />
         </div>
 
-        {/* Blur Kernel Size */}
-        <div className="bg-slate-900/80 p-2.5 rounded border border-slate-800 space-y-1">
-          <div className="flex justify-between items-center text-[10px] text-slate-400 font-bold">
-            <span>BLUR KERNEL</span>
+        {/* Blur Kernel */}
+        <div className="bg-slate-900/80 p-1.5 rounded border border-slate-800 space-y-1">
+          <div className="flex justify-between items-center text-[9px] text-slate-400 font-bold">
+            <span>BLUR</span>
             <span className="text-cyan-400">{blurKernelSize}x{blurKernelSize}</span>
           </div>
           <input
@@ -57,10 +57,10 @@ export default function DetectionPanel() {
           />
         </div>
 
-        {/* Morphological Iterations */}
-        <div className="bg-slate-900/80 p-2.5 rounded border border-slate-800 space-y-1">
-          <div className="flex justify-between items-center text-[10px] text-slate-400 font-bold">
-            <span>MORPH ITERATIONS</span>
+        {/* Morph Iterations */}
+        <div className="bg-slate-900/80 p-1.5 rounded border border-slate-800 space-y-1">
+          <div className="flex justify-between items-center text-[9px] text-slate-400 font-bold">
+            <span>MORPH</span>
             <span className="text-amber-400">{morphologicalIter}</span>
           </div>
           <input
@@ -76,25 +76,25 @@ export default function DetectionPanel() {
       </div>
 
       {/* Overlay Toggles */}
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-2 gap-1.5">
         <button
           onClick={() => setShowBoundingBox(!showBoundingBox)}
-          className={`py-2 px-3 rounded font-bold text-[10px] flex items-center justify-between border ${
+          className={`py-1 px-2 rounded font-bold text-[9px] flex items-center justify-between border ${
             showBoundingBox ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' : 'bg-slate-900 text-slate-500 border-slate-800'
           }`}
         >
-          <span>CV BOUNDING BOX</span>
-          <span className="font-mono">{showBoundingBox ? '[ON]' : '[OFF]'}</span>
+          <span>BBOX</span>
+          <span className="font-mono">{showBoundingBox ? 'ON' : 'OFF'}</span>
         </button>
 
         <button
           onClick={() => setShowKalmanCentroid(!showKalmanCentroid)}
-          className={`py-2 px-3 rounded font-bold text-[10px] flex items-center justify-between border ${
+          className={`py-1 px-2 rounded font-bold text-[9px] flex items-center justify-between border ${
             showKalmanCentroid ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40' : 'bg-slate-900 text-slate-500 border-slate-800'
           }`}
         >
-          <span>KALMAN CENTROID RETICLE</span>
-          <span className="font-mono">{showKalmanCentroid ? '[ON]' : '[OFF]'}</span>
+          <span>KALMAN</span>
+          <span className="font-mono">{showKalmanCentroid ? 'ON' : 'OFF'}</span>
         </button>
       </div>
     </div>

@@ -1,6 +1,7 @@
-import React, { useRef, useMemo, useState } from 'react';
+import React, { useRef, useMemo, useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Stars, OrbitControls, PerspectiveCamera, Line } from '@react-three/drei';
+import { Stars, OrbitControls, PerspectiveCamera, Line, GizmoHelper, GizmoViewport } from '@react-three/drei';
 import * as THREE from 'three';
 import { Eye, Zap, EyeOff, Radio, Target, Maximize2, Minimize2, Monitor, Move } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
@@ -182,9 +183,6 @@ function OrbitalSatelliteTarget({
     }
   };
 
-  useFrame((_, delta) => {
-    simTimeRef.current += delta * targetVelocity;
-    const t = simTimeRef.current + phaseOffset;
   const lastTrailUpdateRef = useRef(0);
   const lastPosUpdateRef = useRef(0);
 
@@ -496,10 +494,7 @@ function KinematicGroundStationObservatory({ pan = 0, tilt = 0, zoomFov = 45 }) 
               </mesh>
             </group>
 
-            {/* 3D Optical Frustum Projection from Telescope Barrel */}
-            <group position={[0, 1.12, 0]} rotation={[Math.PI, 0, 0]}>
-              <CameraFrustumPyramid fov={zoomFov} far={15} />
-            </group>
+
 
             <mesh position={[0.48, 0.2, 0]}>
               <cylinderGeometry args={[0.14, 0.14, 2.0, 16]} />
@@ -796,8 +791,209 @@ export default function DualViewportScene({
     }
   };
 
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && fullscreenMode !== 'SPLIT') {
+        setFullscreenMode('SPLIT');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [fullscreenMode]);
+
   return (
-    <div className="w-full h-full relative bg-[#080b11] border border-slate-800 flex flex-col justify-between select-none p-2 space-y-2">
+    <>
+      {/* Viewport A Fullscreen Portal Overlay */}
+      {fullscreenMode === 'VIEWPORT_A' &&
+        createPortal(
+          <div className="fixed inset-0 z-[99999] w-screen h-screen bg-[#05070c] p-2 flex flex-col font-mono select-none overflow-hidden">
+            {/* Top-Right Floating Controls Bar */}
+            <div
+              className="absolute top-4 right-4 z-50 flex items-center space-x-2 pointer-events-auto"
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <CustomViewFocusDropdown focusTarget={focusTarget} setFocusTarget={setFocusTarget} />
+
+              <button
+                onClick={() => setFullscreenMode('SPLIT')}
+                onMouseDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
+                title="Minimize Viewport back to Dashboard (ESC)"
+                className="bg-amber-950/90 hover:bg-amber-900 border border-amber-500/80 text-amber-300 px-3 py-1.5 rounded flex items-center space-x-2 text-xs font-mono font-bold cursor-pointer shadow-2xl backdrop-blur-md transition-all glow-amber"
+              >
+                <Minimize2 className="w-4 h-4 text-amber-400" />
+                <span>MINIMIZE [ESC]</span>
+              </button>
+            </div>
+
+            {/* 100% Full Page Viewport A Observer Canvas */}
+            <div className="w-full h-full relative">
+              <Canvas gl={{ antialias: true }}>
+                <ambientLight intensity={0.4} />
+                <directionalLight position={[15, 25, 20]} intensity={1.8} color="#ffffff" />
+                <Stars radius={120} depth={50} count={6000} factor={4} saturation={0} fade speed={1} />
+                <OrbitControls ref={orbitControlsRef} makeDefault enablePan={true} maxPolarAngle={Math.PI / 2 + 0.1} />
+
+                <PerspectiveCamera makeDefault fov={50} position={[22, 16, 25]} />
+
+                <ObserverCameraControl
+                  focusTarget={focusTarget}
+                  beaconPos={beaconPos}
+                  orbitControlsRef={orbitControlsRef}
+                />
+
+                <KinematicGroundStationObservatory pan={pan} tilt={tilt} zoomFov={effectiveZoomFov} />
+
+                <OrbitalSatelliteTarget
+                  trajectoryPreset={trajectoryPreset}
+                  beaconRef={beaconRef}
+                  onPosUpdate={(pos) => setBeaconPos(pos)}
+                  dropLOS={dropLOS}
+                  showTrail={showPIP}
+                  targetVelocity={targetVelocity}
+                  isDraggable={true}
+                  orbitControlsRef={orbitControlsRef}
+                />
+
+                {isDualSatMode && (
+                  <OrbitalSatelliteTarget
+                    trajectoryPreset={trajectoryPreset === 'SINUSOIDAL' ? 'FIGURE_8' : trajectoryPreset}
+                    phaseOffset={Math.PI * 0.8}
+                    dropLOS={dropLOS}
+                    showTrail={showPIP}
+                    targetVelocity={targetVelocity}
+                  />
+                )}
+
+                <OpticalLaserBeam isLocked={isLocked} beaconPos={beaconPos} />
+                <EnvironmentalDisturbances turbulenceIntensity={turbulenceIntensity} dropLOS={dropLOS} />
+
+                <gridHelper args={[100, 100, '#1e293b', '#0f172a']} position={[0, -4.5, 0]} />
+
+                {/* Blender-style Axis Gizmo — Top Left */}
+                <GizmoHelper alignment="top-left" margin={[60, 60]}>
+                  <GizmoViewport
+                    axisColors={['#f43f5e', '#22c55e', '#3b82f6']}
+                    labelColor="#ffffff"
+                    hideNegativeAxes={false}
+                  />
+                </GizmoHelper>
+              </Canvas>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* Viewport B Fullscreen Portal Overlay */}
+      {fullscreenMode === 'VIEWPORT_B' &&
+        createPortal(
+          <div className="fixed inset-0 z-[99999] w-screen h-screen bg-[#05070c] p-2 flex flex-col font-mono select-none overflow-hidden">
+            {/* Top-Right Floating Controls Bar */}
+            <div
+              className="absolute top-4 right-4 z-50 flex items-center space-x-2 pointer-events-auto"
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                onClick={() => setShowPIP(!showPIP)}
+                onMouseDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="bg-slate-950/90 px-3 py-1.5 rounded text-xs font-mono text-slate-300 border border-slate-700 hover:text-amber-400 flex items-center cursor-pointer"
+              >
+                {showPIP ? <Eye className="w-3.5 h-3.5 inline mr-1.5" /> : <EyeOff className="w-3.5 h-3.5 inline mr-1.5" />}
+                {showPIP ? 'HIDE PIP' : 'SHOW PIP'}
+              </button>
+
+              <button
+                onClick={() => setFullscreenMode('SPLIT')}
+                onMouseDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
+                title="Minimize Viewport back to Dashboard (ESC)"
+                className="bg-amber-950/90 hover:bg-amber-900 border border-amber-500/80 text-amber-300 px-3 py-1.5 rounded flex items-center space-x-2 text-xs font-mono font-bold cursor-pointer shadow-2xl backdrop-blur-md transition-all glow-amber"
+              >
+                <Minimize2 className="w-4 h-4 text-amber-400" />
+                <span>MINIMIZE [ESC]</span>
+              </button>
+            </div>
+
+            {/* 100% Full Page Viewport B Boresight Feed Canvas */}
+            <div className="w-full h-full relative" style={{ filter: activeSensor.filter, transition: 'filter 0.35s ease' }}>
+              <Canvas
+                gl={{ preserveDrawingBuffer: true, antialias: true }}
+                onCreated={({ gl }) => {
+                  if (onCanvasReady) onCanvasReady(gl.domElement);
+                }}
+              >
+                <ambientLight intensity={0.3} />
+                <directionalLight position={[10, 20, 15]} intensity={1.2} color="#ffffff" />
+                <Stars radius={100} depth={50} count={4000} factor={3} fade />
+
+                <BoresightGimbalRig
+                  pan={pan}
+                  tilt={tilt}
+                  jitterAmp={jitterAmp}
+                  jitterFreq={jitterFreq}
+                  boresightCamRef={boresightCamRef}
+                  beaconRef={beaconRef}
+                  zoomFov={effectiveZoomFov}
+                  onPixelErrorUpdate={onPixelErrorUpdate}
+                />
+
+                <OrbitalSatelliteTarget trajectoryPreset={trajectoryPreset} beaconRef={beaconRef} dropLOS={dropLOS} showTrail={showPIP} targetVelocity={targetVelocity} />
+                {isDualSatMode && (
+                  <OrbitalSatelliteTarget
+                    trajectoryPreset={trajectoryPreset === 'SINUSOIDAL' ? 'FIGURE_8' : trajectoryPreset}
+                    phaseOffset={Math.PI * 0.8}
+                    dropLOS={dropLOS}
+                    showTrail={showPIP}
+                    targetVelocity={targetVelocity}
+                  />
+                )}
+                <EnvironmentalDisturbances turbulenceIntensity={turbulenceIntensity} dropLOS={dropLOS} />
+              </Canvas>
+
+              {/* Reticle Overlay */}
+              <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                <div className={`relative w-52 h-52 border rounded-full flex items-center justify-center transition-colors duration-300 ${activeSensor.reticleBorder}`}>
+                  <div className={`absolute w-full h-[1px] ${activeSensor.crosshairColor}`} />
+                  <div className={`absolute h-full w-[1px] ${activeSensor.crosshairColor}`} />
+                  <div className={`w-3.5 h-3.5 border rounded-full animate-ping ${activeSensor.reticleBorder}`} />
+                  <div className={`absolute top-2 left-2 text-[9px] font-mono ${activeSensor.reticleColor}`}>
+                    STATE: {trackingState} {isDualSatMode ? '(2-SAT VSP)' : ''}
+                  </div>
+                  <div className="absolute bottom-2 right-2 text-[8px] font-mono text-slate-400 bg-slate-950/80 px-1.5 py-0.5 rounded border border-slate-800">
+                    IFOV: {((effectiveZoomFov * Math.PI / 180 / 640) * 1e6).toFixed(1)} µrad/px
+                  </div>
+                </div>
+              </div>
+
+              {/* OpenCV Binary PIP Feed */}
+              {showPIP && binaryFrameB64 && (
+                <div className="absolute bottom-4 right-4 z-20 w-44 h-32 bg-slate-950 p-1.5 rounded border border-emerald-500/40 flex flex-col justify-between shadow-2xl">
+                  <div className="text-[9px] font-mono text-emerald-400 font-bold px-1">
+                    OPENCV THRESHOLD PIP
+                  </div>
+                  <img
+                    src={`data:image/jpeg;base64,${binaryFrameB64}`}
+                    alt="OpenCV Binary PIP Feed"
+                    className="w-full h-24 object-cover rounded bg-black"
+                  />
+                </div>
+              )}
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* Main Split Viewport Stage (ALWAYS mounted in background when in Viewport A mode to keep tracking active) */}
+      <div
+        className={`w-full h-full relative bg-[#080b11] border border-slate-800 flex flex-col justify-between select-none p-2 space-y-2 ${
+          fullscreenMode === 'VIEWPORT_A' ? 'fixed top-0 left-0 w-[640px] h-[480px] opacity-0 pointer-events-none z-[-10]' : ''
+        }`}
+      >
       {/* Top Viewport Header Strip */}
       <div className="flex justify-between items-center px-3 py-1.5 bg-slate-950/80 border border-slate-800 rounded">
         <div>
@@ -805,22 +1001,6 @@ export default function DualViewportScene({
           <p className="text-[9px] font-mono text-slate-500">Real-time FSOC Simulation</p>
         </div>
         <div className="flex items-center space-x-2">
-          {/* Direct 2-Satellite System Toggle Button */}
-          <button
-            onClick={() => useAppStore.getState().toggleDualSatMode()}
-            onMouseDown={(e) => e.stopPropagation()}
-            onPointerDown={(e) => e.stopPropagation()}
-            title="Toggle 2-Satellite Multi-Target Tracking"
-            className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold flex items-center space-x-1.5 transition-all cursor-pointer ${
-              isDualSatMode
-                ? 'bg-cyan-950/90 border border-cyan-400 text-cyan-300 shadow-cyan-500/20'
-                : 'bg-slate-900 border border-slate-700 hover:border-cyan-500 text-slate-300 hover:text-cyan-300'
-            }`}
-          >
-            <span className={`w-1.5 h-1.5 rounded-full ${isDualSatMode ? 'bg-cyan-400 animate-ping' : 'bg-slate-500'}`} />
-            <span>{isDualSatMode ? '2-SAT: BARYCENTER' : '🛰️ 2-SAT TRACKING'}</span>
-          </button>
-
           <button
             onClick={() => setFocusTarget('FREE_ORBIT')}
             onMouseDown={(e) => e.stopPropagation()}
@@ -835,27 +1015,7 @@ export default function DualViewportScene({
       {/* Main Viewport Stage Area */}
       <div className="flex-1 relative grid grid-cols-12 gap-2 overflow-hidden rounded border border-slate-800/80">
         {/* VIEWPORT A: Global Tactical 3D Observer */}
-        <div
-          className={`relative overflow-hidden bg-[#05070c] transition-all duration-300 ${
-            fullscreenMode === 'VIEWPORT_A'
-              ? 'col-span-12 h-full z-30'
-              : fullscreenMode === 'VIEWPORT_B'
-              ? 'hidden'
-              : 'col-span-7'
-          }`}
-        >
-          {/* Top-Left Locked Badge Pill */}
-          <div className="absolute top-3 left-3 z-20 flex items-center space-x-2">
-            <div className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold flex items-center space-x-1.5 border ${
-              isLocked
-                ? 'bg-emerald-950/80 text-emerald-400 border-emerald-500/50 glow-emerald'
-                : 'bg-amber-950/80 text-amber-400 border-amber-500/50 glow-amber'
-            }`}>
-              <span className={`w-1.5 h-1.5 rounded-sm ${isLocked ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
-              <span>{isLocked ? 'LOCKED' : 'SEARCHING'}</span>
-            </div>
-          </div>
-
+        <div className="relative overflow-hidden bg-[#05070c] col-span-7">
           {/* Top-Right Controls: Focus Selector & Fullscreen Toggle Buttons */}
           <div
             className="absolute top-3 right-3 z-50 flex items-center space-x-2 pointer-events-auto"
@@ -866,26 +1026,16 @@ export default function DualViewportScene({
             {/* Custom Tactical View Target Selector Dropdown */}
             <CustomViewFocusDropdown focusTarget={focusTarget} setFocusTarget={setFocusTarget} />
 
-            {/* Viewport A Maximize / Restore Button */}
+            {/* Viewport A Maximize Button */}
             <button
-              onClick={() => setFullscreenMode(fullscreenMode === 'VIEWPORT_A' ? 'SPLIT' : 'VIEWPORT_A')}
+              onClick={() => setFullscreenMode('VIEWPORT_A')}
               onMouseDown={(e) => e.stopPropagation()}
               onPointerDown={(e) => e.stopPropagation()}
-              title="Maximize Viewport A"
-              className="bg-slate-950/90 p-1.5 rounded border border-slate-700 text-slate-300 hover:text-amber-400 cursor-pointer"
+              title="Maximize Viewport A to Full Screen"
+              className="bg-slate-950/90 px-2 py-1 rounded border border-slate-700 text-slate-300 hover:text-amber-400 flex items-center space-x-1 text-[10px] font-mono font-bold cursor-pointer"
             >
-              {fullscreenMode === 'VIEWPORT_A' ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
-            </button>
-
-            {/* App-Wide OS Fullscreen Button */}
-            <button
-              onClick={toggleAppFullscreen}
-              onMouseDown={(e) => e.stopPropagation()}
-              onPointerDown={(e) => e.stopPropagation()}
-              title="Toggle OS Fullscreen"
-              className="bg-slate-950/90 p-1.5 rounded border border-slate-700 text-slate-300 hover:text-amber-400 cursor-pointer"
-            >
-              <Monitor className="w-3 h-3" />
+              <Maximize2 className="w-3 h-3" />
+              <span>MAXIMIZE</span>
             </button>
           </div>
 
@@ -930,27 +1080,20 @@ export default function DualViewportScene({
             <EnvironmentalDisturbances turbulenceIntensity={turbulenceIntensity} dropLOS={dropLOS} />
 
             <gridHelper args={[100, 100, '#1e293b', '#0f172a']} position={[0, -4.5, 0]} />
+
+            {/* Blender-style Axis Gizmo — Top Left */}
+            <GizmoHelper alignment="top-left" margin={[60, 60]}>
+              <GizmoViewport
+                axisColors={['#f43f5e', '#22c55e', '#3b82f6']}
+                labelColor="#ffffff"
+                hideNegativeAxes={false}
+              />
+            </GizmoHelper>
           </Canvas>
         </div>
 
         {/* VIEWPORT B: Gimbal Sensor Boresight Feed */}
-        <div
-          className={`relative overflow-hidden bg-[#05070c] border-l border-slate-800 transition-all duration-300 ${
-            fullscreenMode === 'VIEWPORT_B'
-              ? 'col-span-12 h-full z-30'
-              : fullscreenMode === 'VIEWPORT_A'
-              ? 'hidden'
-              : 'col-span-5'
-          }`}
-        >
-          {/* Top-Left Boresight & Active Sensor Indicator Badge */}
-          <div className={`absolute top-3 left-3 z-10 px-2.5 py-1 rounded border flex items-center space-x-1.5 backdrop-blur-md transition-all duration-300 ${activeSensor.badgeColor}`}>
-            <Zap className="w-3.5 h-3.5 animate-pulse" />
-            <span className="text-[10px] font-mono font-bold">
-              BORESIGHT - {activeSensor.name} ({activeSensor.band}) [FOV {effectiveZoomFov}°]
-            </span>
-          </div>
-
+        <div className="relative overflow-hidden bg-[#05070c] border-l border-slate-800 col-span-5">
           {/* Viewport B Top Controls: PIP & Maximize */}
           <div
             className="absolute top-3 right-3 z-50 flex items-center space-x-1.5 pointer-events-auto"
@@ -969,13 +1112,14 @@ export default function DualViewportScene({
             </button>
 
             <button
-              onClick={() => setFullscreenMode(fullscreenMode === 'VIEWPORT_B' ? 'SPLIT' : 'VIEWPORT_B')}
+              onClick={() => setFullscreenMode('VIEWPORT_B')}
               onMouseDown={(e) => e.stopPropagation()}
               onPointerDown={(e) => e.stopPropagation()}
-              title="Maximize Viewport B"
-              className="bg-slate-950/90 p-1.5 rounded border border-slate-700 text-slate-300 hover:text-amber-400 cursor-pointer"
+              title="Maximize Viewport B to Full Screen"
+              className="bg-slate-950/90 px-2 py-1 rounded border border-slate-700 text-slate-300 hover:text-amber-400 flex items-center space-x-1 text-[10px] font-mono font-bold cursor-pointer"
             >
-              {fullscreenMode === 'VIEWPORT_B' ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+              <Maximize2 className="w-3 h-3" />
+              <span>MAXIMIZE</span>
             </button>
           </div>
 
@@ -1087,5 +1231,6 @@ export default function DualViewportScene({
         </div>
       </div>
     </div>
-  );
+  </>
+);
 }

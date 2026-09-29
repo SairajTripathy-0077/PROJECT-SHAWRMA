@@ -166,7 +166,7 @@ export default function App() {
         <SidebarNav />
 
         {/* Center Main Viewport Container */}
-        <main className="flex-1 h-full relative p-2 flex flex-col overflow-hidden bg-[#06080d]">
+        <main className="flex-1 h-full relative p-1 flex flex-col overflow-hidden bg-[#06080d]">
           <DualViewportScene
             pan={pan}
             tilt={tilt}
@@ -186,20 +186,20 @@ export default function App() {
           />
 
           {/* Floating Control Panel Drawer Trigger Bar */}
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 pointer-events-auto">
+          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 pointer-events-auto">
             <button
               onClick={() => setShowTuningDrawer(!showTuningDrawer)}
-              className="px-4 py-1.5 rounded-full bg-[#080b11]/90 border border-slate-700 hover:border-amber-500 text-slate-200 text-xs font-mono font-bold flex items-center space-x-2 shadow-2xl backdrop-blur-md transition-all glow-amber cursor-pointer"
+              className="px-2.5 py-1 rounded-full bg-[#080b11]/90 border border-slate-700 hover:border-amber-500 text-slate-200 text-[9px] font-mono font-bold flex items-center space-x-1.5 shadow-2xl backdrop-blur-md transition-all glow-amber cursor-pointer"
             >
-              <Sliders className="w-3.5 h-3.5 text-amber-400" />
-              <span>{showTuningDrawer ? `HIDE CONTROL PANEL (${activeTab})` : `OPEN CONTROL PANEL (${activeTab})`}</span>
-              {showTuningDrawer ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" /> : <ChevronUp className="w-3.5 h-3.5 text-slate-400" />}
+              <Sliders className="w-3 h-3 text-amber-400" />
+              <span>{showTuningDrawer ? 'HIDE' : 'PANEL'}</span>
+              {showTuningDrawer ? <ChevronDown className="w-3 h-3 text-slate-400" /> : <ChevronUp className="w-3 h-3 text-slate-400" />}
             </button>
           </div>
 
           {/* Slide-Up Dynamic Control Panel Drawer */}
           {showTuningDrawer && (
-            <div className="absolute bottom-0 left-0 right-0 z-40 p-2 max-h-[48%] overflow-y-auto pointer-events-auto select-auto">
+            <div className="absolute bottom-0 left-0 right-0 z-40 p-1.5 max-h-[42%] overflow-y-auto pointer-events-auto select-auto">
               <ControlPanel />
             </div>
           )}

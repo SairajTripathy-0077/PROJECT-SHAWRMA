@@ -184,10 +184,155 @@ class MultiTracker:
     Multi-Target State Estimator (N=2) with Momentum-Aware Data Association.
     Prevents ID swapping during path crossing/merges using Kinematic Momentum Consistency.
     """
-    def __init__(self, kp_pan=0.15, ki_pan=0.005, kd_pan=0.04, kp_tilt=0.15, ki_tilt=0.005, kd_tilt=0.04, max_vel=50.0):
-        self.kp_pan = kp_pan
-        self.ki_pan = ki_pan
-        self.kd_pan = kd_pan
+    def __init__(
+        self,
+        num_tracks: int = 2,
+        dt_default: float = 0.033,
+        latency_lag_s: float = 0.025,
+        lambda_momentum: float = 3.0,
+        chi2_gate: float = 9.21  # Chi-squared gate for 2 DOF (p=0.01)
+    ):
+        self.num_tracks = num_tracks
+        self.dt_default = dt_default
+        self.latency_lag_s = latency_lag_s
+        self.lambda_momentum = lambda_momentum
+        self.chi2_gate = chi2_gate
+
+        self.tracks = [
+            StateAnchoredKalmanFilter2D(dt_default=dt_default, latency_lag_s=latency_lag_s)
+            for _ in range(num_tracks)
+        ]
+        self.track_names = ["SAT_1", "SAT_2"]
+        self.track_statuses = ["SEARCHING", "SEARCHING"]
+
+    def predict_all(self, dt: float = 0.033) -> List[Tuple[float, float]]:
+        """Predict forward step for all active tracks."""
+        predictions = []
+        for kf in self.tracks:
+            if kf.initialized:
+                px, py = kf.predict(dt=dt)
+            else:
+                px, py = 320.0, 240.0
+            predictions.append((px, py))
+        return predictions
+
+    def get_projections_all(self) -> List[Tuple[float, float]]:
+        """Get latency-compensated forward projected coordinates for all tracks."""
+        projections = []
+        for kf in self.tracks:
+            if kf.initialized:
+                projections.append(kf.get_forward_projection())
+            else:
+                projections.append((320.0, 240.0))
+        return projections
+
+    def update_with_measurements(
+        self,
+        measurements: List[Optional[Tuple[float, float]]],
+        dt: float = 0.033
+    ) -> List[Dict[str, Any]]:
+        """
+        Executes Momentum-Aware Data Association between M measurements and N tracks.
+        """
+        valid_meas = [m for m in measurements if m is not None]
+        m_count = len(valid_meas)
+        n_tracks = self.num_tracks
+
+        # Step 1: Compute Cost Matrix with Spatial Mahalanobis + Momentum Penalty
+        cost_matrix = np.full((n_tracks, max(1, m_count)), 1e6, dtype=np.float32)
+
+        for i, kf in enumerate(self.tracks):
+            if not kf.initialized:
+                continue
+
+            vx_est = float(kf.x[2, 0])
+            vy_est = float(kf.x[3, 0])
+            v_est_mag = float(np.hypot(vx_est, vy_est))
+
+            for j, meas in enumerate(valid_meas):
+                # 1. Spatial Cost (Mahalanobis Distance)
+                d_mahal, residual = kf.compute_mahalanobis_distance(meas[0], meas[1])
+
+                # Reject if outside Chi-square gate
+                if (d_mahal ** 2) > self.chi2_gate and kf.frames_lost < 3:
+                    continue
+
+                # 2. Momentum Cost (Penalize velocity vector misalignment)
+                momentum_cost = 0.0
+                if v_est_mag > 2.0 and kf.last_meas is not None:
+                    # Measured velocity vector from previous measurement
+                    v_meas_x = (meas[0] - kf.last_meas[0]) / max(dt, 0.001)
+                    v_meas_y = (meas[1] - kf.last_meas[1]) / max(dt, 0.001)
+                    v_meas_mag = float(np.hypot(v_meas_x, v_meas_y))
+
+                    if v_meas_mag > 1.0:
+                        # Cosine similarity between established momentum and candidate
+                        dot_prod = (v_meas_x * vx_est + v_meas_y * vy_est)
+                        cos_sim = dot_prod / (v_meas_mag * v_est_mag + 1e-4)
+                        # Range [0.0 (aligned) -> 2.0 (reversal)]
+                        momentum_cost = float(np.clip(1.0 - cos_sim, 0.0, 2.0))
+
+                # Total Combined Cost
+                total_cost = d_mahal + self.lambda_momentum * momentum_cost
+                cost_matrix[i, j] = total_cost
+
+        # Step 2: Optimal Assignment via Minimum Cost Permutation
+        assigned_track_to_meas: Dict[int, int] = {}
+        assigned_meas: set = set()
+
+        if m_count == 1:
+            # 1 measurement available -> assign to track with lowest cost if gated
+            best_i = int(np.argmin(cost_matrix[:, 0]))
+            if cost_matrix[best_i, 0] < 1e5:
+                assigned_track_to_meas[best_i] = 0
+                assigned_meas.add(0)
+            else:
+                # If neither initialized track matched, initialize first uninitialized track
+                for i, kf in enumerate(self.tracks):
+                    if not kf.initialized:
+                        assigned_track_to_meas[i] = 0
+                        assigned_meas.add(0)
+                        break
+
+        elif m_count >= 2:
+            # 2 measurements available -> Evaluate (0->0, 1->1) vs (0->1, 1->0)
+            cost_direct = cost_matrix[0, 0] + cost_matrix[1, 1]
+            cost_crossed = cost_matrix[0, 1] + cost_matrix[1, 0]
+
+            if not self.tracks[0].initialized and not self.tracks[1].initialized:
+                # First frame: deterministic assignment
+                assigned_track_to_meas[0] = 0
+                assigned_track_to_meas[1] = 1
+            elif cost_direct <= cost_crossed and cost_direct < 1e5:
+                assigned_track_to_meas[0] = 0
+                assigned_track_to_meas[1] = 1
+            elif cost_crossed < cost_direct and cost_crossed < 1e5:
+                # Momentum strongly favors cross assignment (resolved crossover without ID swap)
+                assigned_track_to_meas[0] = 1
+                assigned_track_to_meas[1] = 0
+            else:
+                # Fallback matching
+                for i in range(n_tracks):
+                    for j in range(m_count):
+                        if j not in assigned_meas and cost_matrix[i, j] < 1e5:
+                            assigned_track_to_meas[i] = j
+                            assigned_meas.add(j)
+                            break
+
+        # Step 3: Update matched tracks and coast unassigned tracks
+        track_outputs = []
+        for i, kf in enumerate(self.tracks):
+            if i in assigned_track_to_meas:
+                meas_idx = assigned_track_to_meas[i]
+                meas = valid_meas[meas_idx]
+                est_x, est_y, vx, vy = kf.update(meas[0], meas[1], dt=dt)
+                status = "TRACKING"
+            else:
+                est_x, est_y, vx, vy = kf.coast(dt=dt)
+                if kf.frames_lost <= 5:
+                    status = "COASTING"
+                else:
+                    status = "LOST"
 
             self.track_statuses[i] = status
             proj_x, proj_y = kf.get_forward_projection()
@@ -412,12 +557,13 @@ def extract_centroid_and_binary_preview(frame_b64: str) -> Tuple[Optional[Tuple[
         centroid, status, meta = tracker.extract_centroid_tcog(gray, 320.0, 240.0)
         
         threshold = int(meta.get("threshold", 200))
+        threshold = max(0, min(255, threshold))
         _, thresh = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
         _, buf = cv2.imencode(".jpg", thresh)
         bin_b64 = base64.b64encode(buf).decode("utf-8")
         return centroid, bin_b64
     except Exception:
-        return None, None, None
+        return None, None
 
 
 def main():

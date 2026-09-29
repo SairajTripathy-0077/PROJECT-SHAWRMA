@@ -35,7 +35,7 @@ export default function ControlPanel() {
 
   return (
     <div
-      className="bg-[#07090e]/95 border border-slate-800 p-4 rounded-xl shadow-2xl backdrop-blur-xl transition-all relative z-50 pointer-events-auto select-auto"
+      className="bg-[#07090e]/95 border border-slate-800 p-2 rounded-lg shadow-2xl backdrop-blur-xl transition-all relative z-50 pointer-events-auto select-auto"
       onMouseDown={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}

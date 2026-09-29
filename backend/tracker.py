@@ -557,6 +557,7 @@ def extract_centroid_and_binary_preview(frame_b64: str) -> Tuple[Optional[Tuple[
         centroid, status, meta = tracker.extract_centroid_tcog(gray, 320.0, 240.0)
         
         threshold = int(meta.get("threshold", 200))
+        threshold = max(0, min(255, threshold))
         _, thresh = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
         _, buf = cv2.imencode(".jpg", thresh)
         bin_b64 = base64.b64encode(buf).decode("utf-8")
