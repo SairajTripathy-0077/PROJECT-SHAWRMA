@@ -50,6 +50,14 @@ def main():
         with open(target_triple_binary, "wb") as f:
             f.write(b"FSOC_VISION_BACKEND_STAGED_BINARY")
 
+    # Step 2.5: Ensure Tauri Icons Exist
+    print("\n[Step 2.5/3] Generating desktop application icons in src-tauri/icons/...")
+    try:
+        from scripts.generate_icons import generate_icons
+        generate_icons()
+    except Exception as e:
+        print(f"[Build Script] Warning: Icon generation failed with error: {e}")
+
     # Step 3: Run Tauri Build
     print("\n[Step 3/3] Packaging desktop installer with Tauri CLI...")
     run_command("npm run tauri build", cwd=root_dir)
