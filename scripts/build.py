@@ -50,11 +50,11 @@ def main():
         with open(target_triple_binary, "wb") as f:
             f.write(b"FSOC_VISION_BACKEND_STAGED_BINARY")
 
-    # Step 2.5: Ensure Tauri Icons Exist
+    # Step 2.5: Ensure Tauri Windows 3.00 Icons Exist
     print("\n[Step 2.5/3] Generating desktop application icons in src-tauri/icons/...")
     try:
-        from scripts.generate_icons import generate_icons
-        generate_icons()
+        from scripts.make_win32_ico import generate_windows_ico
+        generate_windows_ico()
     except Exception as e:
         print(f"[Build Script] Warning: Icon generation failed with error: {e}")
 
